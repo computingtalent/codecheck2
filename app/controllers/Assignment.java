@@ -41,7 +41,7 @@ package controllers;
    state: as string, not JSON
    score
   
-   with global secondary index
+   with global secondary index (TODO: Not currently)
      problemID 
      submitterID
    
@@ -49,6 +49,12 @@ package controllers;
    oauth_consumer_key [primary key]
    shared_secret
 
+CodeCheckComments
+   assignmentID [partition key] // non-LTI: courseID? + assignmentID, LTI: toolConsumerID/courseID + assignment ID, Legacy tool consumer ID/course ID/resource ID  
+   workID [sort key] // non-LTI: ccid/editKey, LTI: userID
+   comment
+
+   (This is a separate table from CodeCheckWork because we can't guarantee atomic updates if a student happens to update their work while the instructor updates a comment)
 
  Assignment parsing format:
  
@@ -66,7 +72,6 @@ import java.io.IOException;
 import java.net.URLEncoder;
 import java.security.GeneralSecurityException;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
@@ -80,16 +85,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-
-import models.S3Connection;
 import com.horstmann.codecheck.Util;
+
+import models.AssignmentConnector;
 import play.Logger;
 import play.mvc.Controller;
 import play.mvc.Http;
 import play.mvc.Result;
 
 public class Assignment extends Controller {
-    @Inject private S3Connection s3conn;
+    @Inject private AssignmentConnector assignmentConn;
     private static Logger.ALogger logger = Logger.of("com.horstmann.codecheck");
     
     public static ArrayNode parseAssignment(String assignment) {
@@ -111,8 +116,18 @@ public class Assignment extends Controller {
                 String problemURL;
                 String qid = null;
                 boolean checked = false;
+                if (problemDescriptor.startsWith("!")) { // suppress checking
+                	checked = true;
+                	problemDescriptor = problemDescriptor.substring(1);
+                }
                 if (problemDescriptor.startsWith("https")) problemURL = problemDescriptor;
-                else if (problemDescriptor.startsWith("http")) problemURL = "https" + problemDescriptor.substring(4);
+                else if (problemDescriptor.startsWith("http")) {
+                    if (!problemDescriptor.startsWith("http://localhost") && !problemDescriptor.startsWith("http://127.0.0.1")) {
+                        problemURL = "https" + problemDescriptor.substring(4);
+                    }
+                    else
+                        problemURL = problemDescriptor;                    
+                }   
                 else if (problemDescriptor.matches("[a-zA-Z0-9_]+(-[a-zA-Z0-9_]+)*")) { 
                     qid = problemDescriptor;
                     problemURL = "https://www.interactivities.ws/" + problemDescriptor + ".xhtml";
@@ -190,7 +205,7 @@ public class Assignment extends Controller {
         if (assignmentID == null) {
             assignmentNode = JsonNodeFactory.instance.objectNode();
         } else {
-            assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+            assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
             if (assignmentNode == null) return badRequest("Assignment not found");
             
             if (editKey == null) { // Clone
@@ -222,7 +237,7 @@ public class Assignment extends Controller {
         String workID = "";
         boolean editKeySaved = true;
 
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);        
+        ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);        
         if (assignmentNode == null) return badRequest("Assignment not found");
         
         assignmentNode.put("isStudent", isStudent);
@@ -254,19 +269,33 @@ public class Assignment extends Controller {
         } else { // Instructor
             if (ccid == null && editKey != null && !editKeyValid(editKey, assignmentNode))
                 throw new IllegalArgumentException("Edit key does not match");
-            if (ccid != null && editKey != null) // Instructor viewing student submission
+            if (ccid != null && editKey != null) {  // Instructor viewing student submission
+                assignmentNode.put("saveCommentURL", "/saveComment"); 
                 workID = ccid + "/" + editKey;
+                // Only put workID into assignmentNode when viewing submission as Instructor, for security reason
+                assignmentNode.put("workID", workID);
+            }
         }
         assignmentNode.remove("editKey");
         ArrayNode groups = (ArrayNode) assignmentNode.get("problems");
         assignmentNode.set("problems", groups.get(Math.abs(workID.hashCode()) % groups.size()));
         
+        // Start reading work and comments
         String work = null;
-        if (!workID.equals("")) 
-            work = s3conn.readJsonStringFromDynamoDB("CodeCheckWork", "assignmentID", assignmentID, "workID", workID);
+        ObjectNode commentObject = null;
+        String comment = null;
+        if (!workID.equals(""))  {
+            work = assignmentConn.readJsonStringFromDB("CodeCheckWork", "assignmentID", assignmentID, "workID", workID);
+            commentObject = assignmentConn.readJsonObjectFromDB("CodeCheckComments", "assignmentID", assignmentID, "workID", workID);
+        }
         if (work == null) 
             work = "{ assignmentID: \"" + assignmentID + "\", workID: \"" 
                 + workID + "\", problems: {} }";
+        if (commentObject == null)
+            comment = "";
+        else
+            comment = commentObject.get("comment").asText();
+        assignmentNode.put("comment", comment);
 
         String lti = "undefined";
         if (isStudent) {                        
@@ -274,9 +303,10 @@ public class Assignment extends Controller {
             assignmentNode.put("returnToWorkURL", returnToWorkURL); 
             assignmentNode.put("editKeySaved", editKeySaved);
             assignmentNode.put("sentAt", Instant.now().toString());
-            Http.Cookie newCookie1 = Http.Cookie.builder("ccid", ccid).withPath("/").withMaxAge(Duration.ofDays(180)).build();
-            Http.Cookie newCookie2 = Http.Cookie.builder("cckey", editKey).withPath("/").withMaxAge(Duration.ofDays(180)).build();
-            return ok(views.html.workAssignment.render(assignmentNode.toString(), work, ccid, lti)).withCookies(newCookie1, newCookie2);
+            Http.Cookie newCookie1 = models.Util.buildCookie("ccid", ccid);
+            Http.Cookie newCookie2 = models.Util.buildCookie("cckey", editKey);
+            return ok(views.html.workAssignment.render(assignmentNode.toString(), work, ccid, lti))
+                    .withCookies(newCookie1, newCookie2);
         }
         else { // Instructor
             if (ccid == null) {
@@ -300,7 +330,7 @@ public class Assignment extends Controller {
     
     public Result viewSubmissions(Http.Request request, String assignmentID, String editKey)
         throws IOException {
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+        ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
         if (assignmentNode == null) return badRequest("Assignment not found");
         
         if (!editKeyValid(editKey, assignmentNode))
@@ -308,7 +338,7 @@ public class Assignment extends Controller {
 
         ArrayNode submissions = JsonNodeFactory.instance.arrayNode();
 
-        Map<String, ObjectNode> itemMap = s3conn.readJsonObjectsFromDynamoDB("CodeCheckWork", "assignmentID", assignmentID, "workID");
+        Map<String, ObjectNode> itemMap = assignmentConn.readJsonObjectsFromDB("CodeCheckWork", "assignmentID", assignmentID, "workID");
 
         for (String submissionKey : itemMap.keySet()) {
             String[] parts = submissionKey.split("/");
@@ -344,7 +374,7 @@ public class Assignment extends Controller {
         ObjectNode assignmentNode;
         if (params.has("assignmentID")) {
             assignmentID = params.get("assignmentID").asText();
-            assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+            assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
             if (assignmentNode == null) return badRequest("Assignment not found");
             
             if (!params.has("editKey")) return badRequest("Missing edit key");
@@ -363,7 +393,7 @@ public class Assignment extends Controller {
             }
             assignmentNode = null;
         }
-        s3conn.writeJsonObjectToDynamoDB("CodeCheckAssignments", params);
+        assignmentConn.writeJsonObjectToDB("CodeCheckAssignments", params);
 
         String prefix = models.Util.prefix(request);
         String assignmentURL = prefix + "/private/assignment/" + assignmentID + "/" + editKey;
@@ -379,7 +409,7 @@ public class Assignment extends Controller {
             
             Instant now = Instant.now();
             String assignmentID = requestNode.get("assignmentID").asText();
-            ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+            ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
             if (assignmentNode == null) return badRequest("Assignment not found");
             String workID = requestNode.get("workID").asText();
             String problemID = requestNode.get("tab").asText();
@@ -392,24 +422,46 @@ public class Assignment extends Controller {
             // TODO: NPE in logs for the line below
             submissionNode.put("state", problemsNode.get(problemID).get("state").toString());
             submissionNode.put("score", problemsNode.get(problemID).get("score").asDouble());
-            s3conn.writeJsonObjectToDynamoDB("CodeCheckSubmissions", submissionNode);
+            assignmentConn.writeJsonObjectToDB("CodeCheckSubmissions", submissionNode);
             
             if (assignmentNode.has("deadline")) {
                 try {
                     Instant deadline = Instant.parse(assignmentNode.get("deadline").asText());
                     if (now.isAfter(deadline)) 
                         return badRequest("After deadline of " + deadline);
-                } catch(DateTimeParseException e) { // TODO: This should never happen, but it did
+                } catch (DateTimeParseException e) { // TODO: This should never happen, but it did
                     logger.error(Util.getStackTrace(e));
                 }
             }
             result.put("submittedAt", now.toString());      
     
-            s3conn.writeNewerJsonObjectToDynamoDB("CodeCheckWork", requestNode, "assignmentID", "submittedAt");
+            assignmentConn.writeNewerJsonObjectToDB("CodeCheckWork", requestNode, "assignmentID", "submittedAt");
             return ok(result);
         } catch (Exception e) {
             logger.error(Util.getStackTrace(e));
             return badRequest(e.getMessage());
         }           
-    }       
+    }
+    
+    public Result saveComment(Http.Request request) throws IOException {
+        try {
+            ObjectNode result = JsonNodeFactory.instance.objectNode();
+            ObjectNode requestNode = (ObjectNode) request.body().asJson();
+            String assignmentID = requestNode.get("assignmentID").asText();
+            String workID = requestNode.get("workID").asText();
+            String comment = requestNode.get("comment").asText();
+            
+            ObjectNode commentNode = JsonNodeFactory.instance.objectNode();
+            commentNode.put("assignmentID", assignmentID);
+            commentNode.put("workID", workID);
+            commentNode.put("comment", comment);
+            assignmentConn.writeJsonObjectToDB("CodeCheckComments", commentNode);
+            result.put("comment", comment);
+            result.put("refreshURL", "/private/submission/" + assignmentID + "/" + workID);
+            return ok(result);
+        } catch (Exception e) {
+            logger.error(Util.getStackTrace(e));
+            return badRequest(e.getMessage());
+        }           
+    } 
 }

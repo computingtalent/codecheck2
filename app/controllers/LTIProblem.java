@@ -6,7 +6,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -21,16 +20,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.horstmann.codecheck.Problem;
 import com.horstmann.codecheck.Util;
 
+import models.AssignmentConnector;
 import models.CodeCheck;
 import models.LTI;
-import models.S3Connection;
 import play.Logger;
 import play.mvc.Controller;
 import play.mvc.Http;
 import play.mvc.Result;
 
 public class LTIProblem extends Controller {
-    @Inject private S3Connection s3conn;
+    @Inject private AssignmentConnector assignmentConn;
     @Inject private LTI lti;
     @Inject private CodeCheck codeCheck;
     
@@ -111,8 +110,8 @@ public class LTIProblem extends Controller {
             document = document.replace("<head>", "<head><script>const lti = " + ltiNode.toString() + "</script>");
             return ok(document).as("text/html");
         } catch (Exception ex) {
-            logger.error("launch: Cannot load problem " + request + " " + ex.getMessage());
-            return badRequest(ex.getMessage());
+            logger.error("launch: Cannot load problem " + request, ex);
+            return badRequest("Cannot load problem: " + ex.getMessage());
         }
     }       
     
@@ -142,6 +141,7 @@ public class LTIProblem extends Controller {
                 "    <script src='/assets/ace/ace.js'></script>\n" +
                 "    <script src='/assets/ace/theme-kuroir.js'></script>\n" +
                 "    <script src='/assets/ace/theme-chrome.js'></script>\n" +
+                "    <script src='/assets/util.js'></script>\n" +
                 "    <script src='/assets/codecheck2.js'></script>\n" +
                 "    <script src='/assets/horstmann_codecheck.js'></script>\n" +
                 "    <link type='text/css' rel='stylesheet' href='/assets/codecheck.css'/>\n" + 
@@ -177,11 +177,11 @@ public class LTIProblem extends Controller {
                 "    </ol>" +
                 "  </body>" +
                 "</html>";
-            Http.Cookie newCookie = Http.Cookie.builder("ccid", ccid).withMaxAge(Duration.ofDays(180)).build();         
+            Http.Cookie newCookie = models.Util.buildCookie("ccid", ccid);         
             return ok(document).withCookies(newCookie).as("text/html");
         }  catch (Exception ex) {
-            logger.error("launchCodeCheck: Cannot load problem " + repo + "/" + problemName + " " + ex.getMessage());
-            return badRequest(ex.getMessage());
+            logger.error("launchCodeCheck: Cannot load problem " + repo + "/" + problemName, ex);
+            return badRequest("Cannot load problem " + repo + "/" + problemName);
         }
     }
     
@@ -191,6 +191,7 @@ public class LTIProblem extends Controller {
             + "  <meta charset=\"utf-8\">\n"
             + "  <link href='https://horstmann.com/codecheck/css/codecheck_tracer.css' rel='stylesheet' type='text/css'/>  "
             + "  <title>CodeCheck Tracer</title>\n"
+            + "  <script src='/assets/util.js'></script>\n"
             + "  <script src='/assets/codecheck2.js'></script>\n"
             + "</head>\n"
             + "<body>\n";
@@ -221,11 +222,11 @@ public class LTIProblem extends Controller {
             result.append("horstmann_config.lti = " + ltiNode.toString() + "\n");
             result.append(Util.getString(problemFiles, Path.of("tracer.js")));
             result.append(tracerEnd);
-            Http.Cookie newCookie = Http.Cookie.builder("ccid", ccid).withMaxAge(Duration.ofDays(180)).build();         
+            Http.Cookie newCookie = models.Util.buildCookie("ccid", ccid);         
             return ok(result.toString()).withCookies(newCookie).as("text/html");
         }  catch (Exception ex) {
-            logger.error("launchTracer: Cannot load problem " + repo + "/" + problemName + " " + ex.getMessage());
-            return badRequest(ex.getMessage());
+            logger.error("launchTracer: Cannot load problem " + repo + "/" + problemName, ex);
+            return badRequest("Cannot load problem " + repo + "/" + problemName);
         }    
     }
     
@@ -240,7 +241,7 @@ public class LTIProblem extends Controller {
             submissionNode.put("state", requestNode.get("state").toString());
             double score = requestNode.get("score").asDouble();         
             submissionNode.put("score", score);
-            s3conn.writeJsonObjectToDynamoDB("CodeCheckSubmissions", submissionNode);
+            assignmentConn.writeJsonObjectToDB("CodeCheckSubmissions", submissionNode);
             
             String outcomeServiceUrl = requestNode.get("lis_outcome_service_url").asText();
             String sourcedID = requestNode.get("lis_result_sourcedid").asText();
@@ -261,12 +262,12 @@ public class LTIProblem extends Controller {
         ObjectNode requestNode = (ObjectNode) request.body().asJson();
         String submissionID = requestNode.get("submissionID").asText();
         try {
-            ObjectNode result = s3conn.readNewestJsonObjectFromDynamoDB("CodeCheckSubmissions", "submissionID", submissionID);          
+            ObjectNode result = assignmentConn.readNewestJsonObjectFromDB("CodeCheckSubmissions", "submissionID", submissionID);          
             ObjectMapper mapper = new ObjectMapper();
             result.set("state", mapper.readTree(result.get("state").asText()));
             return ok(result);
         } catch (Exception e) {
-            logger.error("retrieve: Cannot retrieve submission " + submissionID + " " + e.getMessage());
+            logger.error("retrieve: Cannot retrieve submission " + submissionID + " " + e.getClass() + " " + e.getMessage());
             return badRequest("retrieve: Cannot retrieve submission " + submissionID);
         }
     }   

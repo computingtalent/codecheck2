@@ -28,9 +28,9 @@ public interface Report
 
    Report systemError(Throwable t);
 
-   Report image(String caption, BufferedImage image) throws IOException;
+   Report image(String caption, BufferedImage image);
 
-   Report image(BufferedImage image) throws IOException;
+   Report image(BufferedImage image);
 
    Report file(String file, String contents);
    
@@ -39,8 +39,6 @@ public interface Report
    Report input(String input);
 
    Report add(Score score);
-
-   Report save(Path dir, String out) throws IOException;
    
    Report pass(boolean b);
    
@@ -49,6 +47,8 @@ public interface Report
    Report runTable(String[] functionNames, String[] argNames, String[][] args, String[] actual, String[] expected, boolean[] outcomes);
    
    Report comment(String key, String value);
+
+   Report hiddenOutputMessage(); 
    
    Report footnote(String text);
    
@@ -56,4 +56,6 @@ public interface Report
    String getText();
    
    default Report errors(List<Error> errors) { return this; }
+   
+   String extension();
 }

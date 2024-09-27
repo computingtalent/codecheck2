@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.text.MessageFormat;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +34,7 @@ public class Files extends Controller {
             + "<script src='/assets/ace/ace.js'></script>\n"
             + "<script src='/assets/ace/theme-kuroir.js'></script>\n"
             + "<script src='/assets/ace/theme-chrome.js'></script>\n"
+            + "<script src='/assets/util.js'></script>\n"
             + "<script src='/assets/codecheck2.js'></script>\n"
             + "<script src='/assets/horstmann_codecheck.js'></script>\n"
             + "<link type='text/css' rel='stylesheet' href='/assets/codecheck.css'/>\n" 
@@ -58,9 +58,12 @@ public class Files extends Controller {
         try {
             problemFiles = codeCheck.loadProblem(repo, problemName, ccid);
         } catch (Exception e) {
-            logger.error("filesHTML2: Cannot load problem " + repo + "/" + " " + problemName + e.getMessage());
-            return badRequest("Cannot load problem");
+            logger.error("filesHTML2: Cannot load problem " + repo + "/" + " " + problemName, e);
+            return badRequest("Cannot load problem " + repo + "/" + problemName);
         }
+        if (problemFiles.containsKey(Path.of("tracer.js")))
+        	return tracer2(ccid, problemFiles);
+        
         Problem problem = new Problem(problemFiles);
         ObjectNode data = models.Util.toJson(problem.getProblemData());
         data.put("url",  models.Util.prefix(request) + "/checkNJS");
@@ -78,7 +81,7 @@ public class Files extends Controller {
             result.append(data.toString());
         result.append(end2);
         wakeupChecker();
-        Http.Cookie newCookie = Http.Cookie.builder("ccid", ccid).withMaxAge(Duration.ofDays(180)).build();
+        Http.Cookie newCookie = models.Util.buildCookie("ccid", ccid);
         return ok(result.toString()).withCookies(newCookie).as("text/html");
     }
 
@@ -102,6 +105,7 @@ public class Files extends Controller {
             + "  <meta charset=\"utf-8\">\n"
             + "  <link href='https://horstmann.com/codecheck/css/codecheck_tracer.css' rel='stylesheet' type='text/css'/>  "
             + "  <title>CodeCheck Tracer</title>\n"
+            + "  <script src='/assets/util.js'></script>\n"
             + "  <script src='/assets/codecheck2.js'></script>\n"
             + "</head>\n"
             + "<body>\n";
@@ -123,10 +127,14 @@ public class Files extends Controller {
         try {
             problemFiles = codeCheck.loadProblem(repo, problemName, ccid);
         } catch (Exception e) {
-            logger.error("filesHTML: Cannot load problem " + repo + "/" + problemName + " " + e.getMessage());
+            logger.error("filesHTML: Cannot load problem " + repo + "/" + problemName, e);
             return badRequest("Cannot load problem " + repo + "/" + problemName);
         }
-        Problem problem = new Problem(problemFiles);
+        return tracer2(ccid, problemFiles);
+    }
+
+	private Result tracer2(String ccid, Map<Path, byte[]> problemFiles) throws IOException {
+		Problem problem = new Problem(problemFiles);
         Problem.DisplayData data = problem.getProblemData();
         StringBuilder result = new StringBuilder();
         result.append(tracerStart);
@@ -136,9 +144,9 @@ public class Files extends Controller {
         result.append(Util.getString(problemFiles, Path.of("tracer.js")));
         result.append(tracerEnd);
 
-        Http.Cookie newCookie = Http.Cookie.builder("ccid", ccid).withMaxAge(Duration.ofDays(180)).build();
+        Http.Cookie newCookie = models.Util.buildCookie("ccid", ccid);
         return ok(result.toString()).withCookies(newCookie).as("text/html");
-    }
+	}
         
     // TODO: Caution--this won't do the right thing with param.js randomness when
     // used to prebuild UI like in ebook, Udacity
@@ -152,12 +160,12 @@ public class Files extends Controller {
         try {
             problemFiles = codeCheck.loadProblem(repo, problemName, ccid);
         } catch (Exception e) {
-            logger.error("fileData: Cannot load problem " + repo + "/" + problemName + " " + e.getMessage());
-            return badRequest("Cannot load problem");
+            logger.error("fileData: Cannot load problem " + repo + "/" + problemName, e);
+            return badRequest("Cannot load problem " + repo + "/" + problemName);
         }       
         
         Problem problem = new Problem(problemFiles);
-        Http.Cookie newCookie = Http.Cookie.builder("ccid", ccid).withMaxAge(Duration.ofDays(180)).build();
+        Http.Cookie newCookie = models.Util.buildCookie("ccid", ccid);
         return ok(models.Util.toJson(problem.getProblemData())).withCookies(newCookie);
     }
 
@@ -197,7 +205,7 @@ public class Files extends Controller {
         try {
             problemFiles = codeCheck.loadProblem(repo, problemName, ccid);
         } catch (Exception e) {
-            logger.error("filesHTML: Cannot load problem " + repo + "/" + problemName + " " + e.getMessage());
+            logger.error("filesHTML: Cannot load problem " + repo + "/" + problemName, e);
             return badRequest("Cannot load problem " + repo + "/" + problemName);
         }
         Problem problem = new Problem(problemFiles);
@@ -304,7 +312,7 @@ public class Files extends Controller {
         // result.append(jsonpAjaxSubmissionScript);
         result.append(bodyEnd);
 
-        Http.Cookie newCookie = Http.Cookie.builder("ccid", ccid).withMaxAge(Duration.ofDays(180)).build();
+            Http.Cookie newCookie = models.Util.buildCookie("ccid", ccid);
         return ok(result.toString()).withCookies(newCookie).as("text/html");
     }       
 }

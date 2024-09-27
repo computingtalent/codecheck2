@@ -166,7 +166,7 @@ public class HTMLReport implements Report {
      * @see com.horstmann.codecheck.Report#image(java.lang.String, byte[])
      */
     @Override
-    public HTMLReport image(String captionText, BufferedImage img) throws IOException {
+    public HTMLReport image(String captionText, BufferedImage img) {
         if (img == null)
             return this;
         caption(captionText);
@@ -180,19 +180,23 @@ public class HTMLReport implements Report {
      * @see com.horstmann.codecheck.Report#image(byte[])
      */
     @Override
-    public HTMLReport image(BufferedImage img)  throws IOException {
+    public HTMLReport image(BufferedImage img) {
         if (img == null)
             return this;
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ImageIO.write(img, "PNG", out);
-        out.close();
-        byte[] pngBytes = out.toByteArray();
-        String data = Base64.getEncoder().encodeToString(pngBytes);
-        builder.append("<p class=\"screencapture\">");
-        builder.append("<img alt=\"screen capture\" src=\"data:image/png;base64,");
-        builder.append(data);
-        builder.append("\"/>");
-        builder.append("</p>\n");
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(img, "PNG", out);
+            out.close();
+            byte[] pngBytes = out.toByteArray();
+            String data = Base64.getEncoder().encodeToString(pngBytes);
+            builder.append("<p class=\"screencapture\">");
+            builder.append("<img alt=\"screen capture\" src=\"data:image/png;base64,");
+            builder.append(data);
+            builder.append("\"/>");
+            builder.append("</p>\n");
+        } catch (IOException ex) {
+            builder.append("<p>Cannot display image</p>");
+        }
         return this;
     }
     
@@ -280,19 +284,7 @@ public class HTMLReport implements Report {
             builder.append("</div>\n");
         }
     }
-   
-    /*
-     * (non-Javadoc)
-     * 
-     * @see com.horstmann.codecheck.Report#save(java.nio.file.Path)
-     */
-    @Override
-    public HTMLReport save(Path dir, String out) throws IOException {
-        Path outPath = dir.resolve(out + ".html");
-        Files.write(outPath, builder.toString().getBytes());
-        return this;
-    }
-    
+       
     @Override
     public void close() {
         addFootnotes();
@@ -301,6 +293,9 @@ public class HTMLReport implements Report {
     
     @Override
     public String getText() { return builder.toString(); }
+    
+    @Override
+    public String extension() { return "html"; }
 
     private HTMLReport tableStart(String klass) {
         builder.append("<table");
@@ -459,5 +454,10 @@ public class HTMLReport implements Report {
         builder.insert(metaOffset, meta);
         metaOffset += meta.length();
         return this;
+    }
+
+    public HTMLReport hiddenOutputMessage() {
+        output("[hidden]");
+        return this; 
     }
 }

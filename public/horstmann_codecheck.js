@@ -1,10 +1,12 @@
+// Uses postData, createButton from util.js
+
 window.horstmann_codecheck = {
   setup: [],
 };
 
 if (typeof ace !== 'undefined') { ace.config.set('themePath', 'script'); } 
 
-window.addEventListener('load', function () {
+window.addEventListener('load', async function () {
   'use strict';
 
   function createRearrange(fileName, setup) {
@@ -140,17 +142,17 @@ window.addEventListener('load', function () {
 
     function makeTile(contents, isFixed) {
       let tileDiv = createTile()
-    let text
-    if (typeof contents === 'object') {
-    text = contents.text
-    if ('code' in contents) {
-      codeMap.set(tileDiv, contents.code)
-      tileDiv.classList.add('pseudo')            
+      let text
+      if (typeof contents === 'object') {
+        text = contents.text
+        if ('code' in contents) {
+          codeMap.set(tileDiv, contents.code)
+          tileDiv.classList.add('pseudo')            
         }   
-    }
-    else {
-      text = contents
-    }
+      }
+      else {
+        text = contents
+      }
       if (isFixed) {
         tileDiv.classList.add('fixed')
         tileDiv.setAttribute('draggable', false);
@@ -172,7 +174,7 @@ window.addEventListener('load', function () {
           }          
           tileDiv.textContent = strippedText
           setIndent(tileDiv, minIndent)
-    }
+        }
       }
       else {
         tileDiv.textContent = text
@@ -367,11 +369,12 @@ window.addEventListener('load', function () {
         drag = undefined
         insertDroppedTileRight(tileDiv)
       })
-
-      for (const fixed of setup.fixed)
-        left.appendChild(makeTile(fixed, true)) 
-      for (const tile of setup.tiles)
-        right.appendChild(makeTile(tile, false)) 
+      if ('fixed' in setup)
+        for (const fixed of setup.fixed)
+          left.appendChild(makeTile(fixed, true)) 
+      if ('tiles' in setup)
+        for (const tile of setup.tiles)
+          right.appendChild(makeTile(tile, false)) 
       both.classList.add('horstmann_rearrange')
 
       return both
@@ -379,16 +382,16 @@ window.addEventListener('load', function () {
 
     function getState() {
       const leftTiles = []
-      const group = []
+      let group = []
       for (const tile of left.children) {
         if (tile.classList.contains('fixed')) {
           leftTiles.push(group)
-          group.length = 0
+          group = []
         }
         else {
-      let state = { text: tile.textContent, indent: tile.indent }
-      let code = codeMap.get(tile)
-      if (code !== undefined) state.code = code  
+          let state = { text: tile.textContent, indent: tile.indent }
+          let code = codeMap.get(tile)
+          if (code !== undefined) state.code = code  
           group.push(state) 
         } 
       }
@@ -398,14 +401,14 @@ window.addEventListener('load', function () {
         left: leftTiles,
         right: [...right.children].map(tile => {
             let code = codeMap.get(tile)
-        if (code !== undefined) return { text: tile.textContent, code }  
-          else return tile.textContent
+            if (code !== undefined) return { text: tile.textContent, code }  
+            else return tile.textContent
         })  
       }    
     }
 
     function restoreState(state) {
-    codeMap.clear()
+      codeMap.clear()
       let i = 0
       let leftTiles = [...left.children]
       for (const tile of leftTiles) {
@@ -414,7 +417,8 @@ window.addEventListener('load', function () {
           i++
           for (let j = group.length - 1; j >= 0; j--) {
             const newTile = makeTile(group[j], false)
-            left.insertBefore(newTile)
+            left.insertBefore(newTile, tile)
+            setIndent(newTile, tile.group[i].indent)
           }
         }
         else
@@ -423,6 +427,7 @@ window.addEventListener('load', function () {
       for (const t of state.left[i]) {
         const newTile = makeTile(t, false) 
         left.appendChild(newTile)      
+        setIndent(newTile, t.indent)
       }
       right.innerHTML = ''
       for (const t of state.right) {
@@ -528,17 +533,13 @@ window.addEventListener('load', function () {
     };
 
     if (readonly) {
-      editor.setReadOnly(true);
-      // https://stackoverflow.com/questions/32806060/is-there-a-programmatic-way-to-hide-the-cursor-in-ace-editor
-      editor.renderer.$cursorLayer.element.style.display = 'none'
       editor.setTheme('ace/theme/kuroir');
-      let lines = editor.getSession().getDocument().getLength();
-      editor.setOptions({
-        minLines: lines,
-        maxLines: lines
-      });                
+      editor.setReadOnly(true);
+      // At one time, the cursor was completely blocked, but it seems reasonable to allow copying the code
+      // https://stackoverflow.com/questions/32806060/is-there-a-programmatic-way-to-hide-the-cursor-in-ace-editor
+      //editor.renderer.$cursorLayer.element.style.display = 'none'
       // https://github.com/ajaxorg/ace/issues/266
-      editor.textInput.getElement().tabIndex = -1
+      //editor.textInput.getElement().tabIndex = -1
     } else {
       editor.setTheme('ace/theme/chrome');
       
@@ -692,7 +693,7 @@ window.addEventListener('load', function () {
     let editors = new Map()
 
     function restoreState(dummy, state) { // TODO: Eliminate dummy
-      if (state === null) return;
+      if (state === null || state === undefined) return; // TODO Can it be null???
       let work = state.work
       if ('studentWork' in state) { // TODO: Legacy state
         work = {}
@@ -806,7 +807,8 @@ window.addEventListener('load', function () {
         
         let editorDiv = document.createElement('div')
         editorDiv.classList.add('editor')
-        editorDiv.textContent = setup.useFiles[fileName].replace(/\r?\n$/, '');
+        let text = setup.useFiles[fileName].replace(/\r?\n$/, '')
+        editorDiv.textContent = text
         let editor = ace.edit(editorDiv)
         
         let fileObj = document.createElement('div')
@@ -816,35 +818,71 @@ window.addEventListener('load', function () {
         filenameDiv.textContent = directoryPrefix + fileName
         fileObj.appendChild(filenameDiv)
         fileObj.appendChild(editorDiv)
-        setupAceEditor(editorDiv, editor, fileName, /*readonly*/ true)        
+        const MAX_LINES = 200
+        const lines =  text.split(/\n/).length            
+        editor.setOption('maxLines', Math.min(lines, MAX_LINES))
+        setupAceEditor(editorDiv, editor, fileName, /*readonly*/ true)
         form.appendChild(fileObj)
+
+        if (lines > MAX_LINES) {
+          const viewButton = createButton('hc-command', _('Expand'), function() {
+			if (editor.getOption('maxLines') > MAX_LINES) {
+                editor.setOption('maxLines', MAX_LINES)
+                editor.resize()               
+                viewButton.innerHTML = _('Expand')
+            }
+            else {
+                editor.setOption('maxLines', lines)
+                editor.resize()          
+                viewButton.innerHTML = _('Collapse')
+            }
+          })
+          form.appendChild(viewButton)
+        }
       }  
       
-      submitButton = document.createElement('span')
-      submitButton.textContent = submitButtonLabel
-      submitButton.classList.add('hc-button')
-      submitButton.classList.add('hc-start')
-      submitButton.tabIndex = 0 
+	  submitButton = createButton('hc-start', submitButtonLabel, async function() {
+        response.textContent = 'Submitting...'
+        let params = {}
+        // Hidden inputs
+        for (const input of form.getElementsByTagName('input')) {
+          let name = input.getAttribute('name')
+          if (name !== null) 
+            params[name] = input.getAttribute('value')
+        }
+
+        for (const [filename, editor] of editors) {
+          editor.clearErrorAnnotations()
+          params[filename] = editor.getText()
+        }
+        
+        submitButton.classList.add('hc-disabled')
+        if (downloadButton !== undefined) downloadButton.style.display = 'none'
+        try {
+          const result = await postData(setup.url, params)
+          successfulSubmission(result)
+        } catch (e) {
+          response.innerHTML = `<div>Error: ${e.message}</div>` 
+		}
+		submitButton.classList.remove('hc-disabled');
+      })
+
       submitDiv.appendChild(submitButton);
 
       
-      let resetButton = document.createElement('span')
-      resetButton.textContent = _('Reset')
-      resetButton.classList.add('hc-button')
-      resetButton.classList.add('hc-start')
-      resetButton.tabIndex = 0
+      let resetButton = createButton('hc-start', _('Reset'), function() {
+        restoreState(element, initialState)
+        element.correct = 0;
+        response.innerHTML = ''
+        if (downloadButton !== undefined) downloadButton.style.display = 'none'
+      })
       submitDiv.appendChild(resetButton);
 
       if ('download' in horstmann_config) {
-        downloadButton = document.createElement('span')
-        downloadButton.textContent = _('Download')
-        downloadButton.classList.add('hc-button')
-        downloadButton.classList.add('hc-start')
-        downloadButton.tabIndex = 0
-        downloadButton.style.display = 'none'
-        downloadButton.addEventListener('click', () => {
-          horstmann_config.download('data:application/octet-stream;base64,' + downloadButton.data.zip, downloadButton.data.metadata.ID + '.signed.zip', 'application/octet-stream')
+        downloadButton = createButton('hc-start', _('Download'), () => {
+          horstmann_config.download('data:application/octet-stream;base64,' + downloadButton.data.zip, downloadButton.data.metadata.ID + '.signed.zip', 'application/octet-stream') 
         })
+        downloadButton.style.display = 'none'
         submitDiv.appendChild(downloadButton);
       }
       
@@ -864,17 +902,9 @@ window.addEventListener('load', function () {
       response.classList.add('codecheck-submit-response')
       form.appendChild(response)
       
-      prepareSubmit(setup.url);
-
       element.appendChild(form)
             
       let initialState = getState();
-      resetButton.addEventListener('click', function() {
-        restoreState(element, initialState)
-        element.correct = 0;
-        response.innerHTML = ''
-        if (downloadButton !== undefined) downloadButton.style.display = 'none'
-      })
     }
 
     function getState() {
@@ -911,48 +941,14 @@ window.addEventListener('load', function () {
       }
               
       if ('errors' in data) {
-        for (const error of data.errors) 
-          editors.get(error['file']).errorAnnotation(error['line'], error['message'])
+        for (const error of data.errors) {
+          const editor = editors.get(error['file'])
+          // TODO: Non-editable files are not in editors. Would be nice to annotate anyway 			
+          if (editor !== undefined) editor.errorAnnotation(error['line'], error['message'])
+        }
       }
     }
     
-    function prepareSubmit(url) {
-      submitButton.addEventListener('click', function() {
-        response.textContent = 'Submitting...'
-        let params = {}
-        // Hidden inputs
-        for (const input of form.getElementsByTagName('input')) {
-          let name = input.getAttribute('name')
-          if (name !== null) 
-            params[name] = input.getAttribute('value')
-        }
-
-        for (const [filename, editor] of editors) {
-          editor.clearErrorAnnotations()
-          params[filename] = editor.getText()
-        }
-        
-        submitButton.classList.add('hc-disabled')
-        if (downloadButton !== undefined) downloadButton.style.display = 'none'
-
-        let xhr = new XMLHttpRequest()
-        xhr.withCredentials = true
-        xhr.timeout = 300000 // 5 minutes
-        xhr.open('POST', url);    
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.onload = function() {
-          submitButton.classList.remove('hc-disabled');
-          if (xhr.status === 200) 
-            successfulSubmission(JSON.parse(xhr.responseText))
-          else 
-            response.innerHTML = 
-              '<div>Error Status: ' + xhr.status + ' ' + xhr.statusText + '</div>\n' +
-              '<div>Error Response: ' + xhr.responseText + '</div>\n';
-        }
-        xhr.send(JSON.stringify(params))
-      })
-    }
-
     // ..................................................................
     // Start of initElement
       
@@ -965,7 +961,26 @@ window.addEventListener('load', function () {
  
   // Start of event listener
   let elements = document.getElementsByClassName('horstmann_codecheck')
-  for (let index = 0; index < elements.length; index++) 
-    initElement(elements[index],
-                window.horstmann_codecheck.setup[index]) 
+  for (let index = 0; index < elements.length; index++) {
+	const setup = window.horstmann_codecheck.setup[index]
+	/*
+	  Required properties: 
+        repo
+	    problem
+	  Optional:
+	    url
+	    requiredFiles (if not present, obtained with fileData)
+	    useFiles
+	    order
+	    prefix
+	*/
+	if ('requiredFiles' in setup)   
+      initElement(elements[index], setup)
+    else {
+	  const origin = new URL(window.location.href).origin
+	  const response = await fetch(`${origin}/fileData?repo=${setup.repo}&problem=${setup.problem}`)
+      const data = await response.json()
+      initElement(elements[index], { url: `${origin}/checkNJS`, ...data, ...setup })
+    }	                
+  }
 });

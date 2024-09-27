@@ -1,10 +1,8 @@
 package com.horstmann.codecheck;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 public class Calls {
     
@@ -12,6 +10,16 @@ public class Calls {
         String name;
         String args;
         List<String> modifiers;
+        private boolean hidden = false; 
+
+        public boolean isHidden() {
+            return hidden; 
+        }
+    
+        public void setHidden(boolean value)
+        {
+            hidden = value; 
+        }
     }
     
     private Language language;
@@ -33,6 +41,12 @@ public class Calls {
 
     public Call getCall(int i) {
         return calls.get(i);
+    }
+    
+    public List<Call> getCalls() {
+        if (lastGroup < calls.size() - 1)
+            throw new CodeCheckException("No function below CALL in " + file + "\n");
+        return calls;
     }
 
     public void addCall(Path file, String args, String next) {
@@ -56,13 +70,5 @@ public class Calls {
             }
             lastGroup = calls.size() - 1;            
         } 
-    }
-
-    public Map<Path, String> writeTester(Problem problem, ResourceLoader resourceLoader) throws IOException {
-        if (lastGroup < calls.size() - 1)
-            throw new CodeCheckException("No function below CALL in " + file + "\n");
-        String contents = Util.getString(problem.getSolutionFiles(), file);
-        if (contents.isEmpty()) contents = Util.getString(problem.getUseFiles(), file);
-        return language.writeTester(file, contents, calls, resourceLoader);
     }
 }

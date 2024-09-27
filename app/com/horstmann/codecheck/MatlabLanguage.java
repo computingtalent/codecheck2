@@ -47,27 +47,9 @@ public class MatlabLanguage implements Language {
             lines.add(i++, 
                     "    if argv[1] == \"" + (k + 1) + "\" :");
             lines.add(i++, 
-                    "        expected = "
-                     + call.name + "(" + call.args
-                    + ")");
+                    "        result = " + call.name + "(" + call.args + ")");
             lines.add(i++,
-                    "        print(expected)");
-            lines.add(i++, 
-                    "        actual = "
-                    + moduleName + "." + call.name + "("
-                    + call.args + ")");
-            lines.add(i++, 
-                    "        print(actual)");
-            lines.add(
-                    i++,
-                    "        if expected == actual :");
-            lines.add(i++, 
-                    "            print(\"true\")");
-            lines.add(
-                    i++,
-                    "        else :");
-            lines.add(i++, 
-                    "            print(\"false\")");
+                    "        print(result)");
         }
         lines.add("main()");
         Path p = pathOf(moduleName + "CodeCheck");
@@ -81,16 +63,7 @@ public class MatlabLanguage implements Language {
         return new String[] { "%%", "" };
     }
 
-    private static String patternString = "\\s*(?<name>[A-Za-z][A-Za-z0-9]*)\\s*=\\s*(?<rhs>.+)";
-    private static Pattern pattern = Pattern.compile(patternString);
-
-    /*
-     * (non-Javadoc)
-     * 
-     * @see com.horstmann.codecheck.Language#variablePattern()
-     */
-    @Override
-    public Pattern variableDeclPattern() {
-        return pattern;
-    }
+    private static Pattern VARIABLE_DECL_PATTERN = Pattern.compile(
+        	"(?<name>[A-Za-z][A-Za-z0-9]*)\\s*=\\s*(?<rhs>.+)");
+    @Override public Pattern variableDeclPattern() { return VARIABLE_DECL_PATTERN; }
 }

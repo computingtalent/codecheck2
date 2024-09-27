@@ -79,11 +79,15 @@ public class Problem {
 
     private static final Pattern IMG_PATTERN = Pattern
             .compile("[<]\\s*[iI][mM][gG]\\s*[sS][rR][cC]\\s*[=]\\s*['\"]([^'\"]*)['\"][^>]*[>]");
+    private static final Pattern LINK_START = Pattern
+            .compile("<\\s*[aA]\\s+[^>]*[hH][rR][eE][fF]\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>");
+    private static final Pattern LINK_END = Pattern.compile("<\\s*/\\s*[aA]\\s*>");
 
     public Problem(Map<Path, byte[]> problemFiles) throws IOException {
-        this.problemFiles = problemFiles;
         language = Language.languageFor(problemFiles.keySet());        
         if (language == null) throw new CodeCheckException("Cannot find language from " + problemFiles.keySet());
+            
+        this.problemFiles = problemFiles;
         annotations = new Annotations(language);
         String[] delims = language.pseudoCommentDelimiters();
         start = delims[0];
@@ -135,7 +139,7 @@ public class Problem {
                 }
             }
             inputFiles.put(inputPath, problemFiles.get(inputPath));
-            for (String runargs : annotations.findKeys("ARGS"))
+            for (String runargs : annotations.findAll("ARGS"))
                 for (String arg : runargs.split("\\s+"))
                     if (isTextFile(arg)) {
                         Path argPath = Paths.get(arg);
@@ -200,6 +204,26 @@ public class Problem {
             result.replace(end, result.length(), "");
         if (start != -1)
             result.replace(0, start, "");
+
+        // Check if links are relative or not, if relative links, change it to normal text
+        Matcher linkMatcherStart = LINK_START.matcher(result);
+        Matcher linkMatcherEnd = LINK_END.matcher(result);
+        int startLink = 0;
+        int endLink = 0;
+        while (linkMatcherStart.find(startLink) && linkMatcherEnd.find(startLink)) {
+            startLink = linkMatcherStart.start();
+            endLink = linkMatcherEnd.end();
+            String hrefLink = result.substring(linkMatcherStart.start(1), linkMatcherStart.end(1)).toLowerCase();     
+            if (!(hrefLink.startsWith("http://") || hrefLink.startsWith("https://"))) {
+                int startContent = linkMatcherStart.end();
+                int endContent = linkMatcherEnd.start();
+                String contentOfLink = result.substring(startContent, endContent);
+                result.replace(startLink, endLink, contentOfLink);
+                startLink += contentOfLink.length();
+            }
+            else
+              startLink = endLink;
+        }
 
         Matcher matcher = IMG_PATTERN.matcher(result);
         start = 0;
@@ -284,13 +308,15 @@ public class Problem {
         boolean hasEdit = false;
         boolean hasShow = false;
         boolean hasTile = false;
+        boolean firstHide = false;
         for (int i = 0; i < lines.length && !hasTile && !hasEdit; i++) {
-            Annotations.Annotation ann = Annotations.parse(lines[i], start, end); 
-            if (ann.key.equals("EDIT")) hasEdit = true;
+            Annotations.Annotation ann = Annotations.parse(lines[i], start, end);
+            if (i == 0 && (ann.key.equals("HIDE") || ann.key.equals("HIDDEN"))) firstHide = true;
+            else if (ann.key.equals("EDIT")) hasEdit = true;
             else if (ann.key.equals("SHOW")) hasShow = true;
             else if (ann.key.equals("TILE")) hasTile = true;            
         }
-        if (lines.length == 0 || Annotations.parse(lines[0], start, end).key.equals("HIDE") && !hasShow && !hasEdit) {
+        if (lines.length == 0 || firstHide && !hasShow && !hasEdit) {
             EditorState state = new EditorState();          
             state.editors = new ArrayList<String>(); // Empty list means file is hidden
             return state;                   
@@ -420,17 +446,6 @@ public class Problem {
                     hiding = true;
                 if (hiding)
                     lines[i] = null;
-                if (ann.key.equals("SHOW")) {
-                    hiding = false;
-                    String showString = start + "SHOW";
-                    int n1 = lines[i].indexOf(showString);
-                    int n2 = showString.length();
-                    int n3 = lines[i].lastIndexOf(end);
-                    if (n1 + n2 < n3)
-                        lines[i] = lines[i].substring(0, n1) + lines[i].substring(n1 + n2 + 1, n3);
-                    else
-                        lines[i] = null;
-                }
             }
         }
         // Emit final section
@@ -721,7 +736,7 @@ whitespace2 pseudocode2
     }
     
     public String getId() {
-        String problemId = annotations.findUniqueKey("ID");
+        String problemId = annotations.findUnique("ID");
         if (problemId == null) { // TODO: Move to Problem
             problemId = Util.removeExtension(solutionFiles.keySet().iterator().next().getFileName());                
         }

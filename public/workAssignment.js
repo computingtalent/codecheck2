@@ -58,28 +58,28 @@ window.addEventListener('DOMContentLoaded', () => {
     updateScoreInElementText(document.getElementById('heading'), result, explanation)    
   }
   
-  function adjustDocHeight(iframe, request) {
-    console.log({frame: iframeKey.get(iframe), oldHeight: iframe.scrollHeight, newHeight: request.param.docHeight })
-    const newHeight = request.param.docHeight;
+  function adjustDocHeight(iframe, newHeight) {
+    // console.log({frame: iframeKey.get(iframe), oldHeight: iframe.scrollHeight, newHeight })
+    if ('chrome' in window) { // https://stackoverflow.com/questions/4565112/javascript-how-to-find-out-if-the-user-browser-is-chrome
+      const CHROME_FUDGE = 32 // to prevent scroll bars in Chrome
+      newHeight += CHROME_FUDGE
+	}
     if (iframe.scrollHeight < newHeight)
       iframe.style.height = newHeight + 'px'
   }
 
-  function restoreStateOfProblem(iframe, request) {
+  function getStateOfProblem(iframe) {
     let key = iframeKey.get(iframe) 
-    if (key in work.problems) {
-      iframe.contentWindow.postMessage({ request, param: work.problems[key].state }, '*');
-    } else {
-      iframe.contentWindow.postMessage({ request, param: null }, '*')
-    }
-    updateScoreDisplay();     
+    updateScoreDisplay(); // TODO: Why?         
+    if (key in work.problems) return work.problems[key].state
+    else return null // TODO: Why not undefined
   }
 
-  async function sendScoreAndState(iframe, request) {    
+  async function sendScoreAndState(iframe, score, state) {    
     if (!assignment.isStudent) return // Viewing as instructor
     let key = iframeKey.get(iframe)  
     // Don't want qid which is also in request.param
-    work.problems[key] = { score: request.param.score, state: request.param.state }
+    work.problems[key] = { score, state }
     updateScoreDisplay();     
     try {
       responseDiv.textContent = ''
@@ -102,6 +102,11 @@ window.addEventListener('DOMContentLoaded', () => {
   let select = undefined
   
   function initializeProblemSelectorUI() {
+	if (assignment.problems.length === 1) {
+	  document.getElementById('abovebuttons').style.display = 'none'
+	  return
+    } 
+		
     buttonDiv = document.createElement('div')
     buttonDiv.id = 'buttons'
     document.body.appendChild(buttonDiv)      
@@ -118,6 +123,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   
   function addProblemSelector(index, title) {
+	if (assignment.problems.length === 1) return  
     const number = '' + (index + 1)
     if (useTitles) {
       const option = document.createElement('option')
@@ -129,15 +135,15 @@ window.addEventListener('DOMContentLoaded', () => {
   }
     
   function activateProblemSelection() {
+	if (useTitles) {
+	  select.disabled = false      
+	  buttonDiv.children[1].classList.remove('hc-disabled')
+	} else if (assignment.problems.length > 1) {
+	  for (const b of buttonDiv.children)
+	    b.classList.remove('hc-disabled')
+	} 
     savedCopyCheckbox.checked = true 
-    if (useTitles) {
-      select.disabled = false      
-      buttonDiv.children[1].classList.remove('hc-disabled')
-    } else {
-      for (const b of buttonDiv.children)
-        b.classList.remove('hc-disabled')
-    }
-    const tab = 'tab' in work ? work.tab : 0 
+    const tab = 'tab' in work ? work.tab : 0
     setTimeout(() => selectProblem(tab), 1000)
   }
   
@@ -155,7 +161,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (index < 0 || index >= assignment.problems.length) return
     if (useTitles) {
       select.selectedIndex = index      
-    } else {
+    } else if (assignment.problems.length > 1) {
       for (let i = 0; i < buttonDiv.children.length; i++)
         if (i === index)
           buttonDiv.children[i].classList.add('active')
@@ -177,7 +183,7 @@ window.addEventListener('DOMContentLoaded', () => {
   function updateScoreInProblemSelector(index, score) {
     if (useTitles) {
       updateScoreInElementText(select.children[index], score)            
-    } else {
+    } else if (assignment.problems.length > 1) {
       updateScoreInElementText(buttonDiv.children[index], score)
     }
   }
@@ -198,11 +204,21 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener("message", event => {
     let iframe = sendingIframe(event)
     if (event.data.query === 'docHeight') 
-      adjustDocHeight(iframe, event.data)
-    else if (event.data.query === 'retrieve') 
-      restoreStateOfProblem(iframe, event.data)      
+      adjustDocHeight(iframe, event.data.param.docHeight)
+    else if (event.data.query === 'retrieve') {
+      const state = getStateOfProblem(iframe)      
+      iframe.contentWindow.postMessage({ request: event.data, param: state }, '*')
+    }
     else if (event.data.query === 'send') 
-      sendScoreAndState(iframe, event.data)
+      sendScoreAndState(iframe, event.data.param.score, event.data.param.state)
+    else if (event.data.subject === 'lti.frameResize')
+      adjustDocHeight(iframe, event.data.height)
+    else if (event.data.subject === 'SPLICE.reportScoreAndState')
+      sendScoreAndState(iframe, event.data.score, event.data.state)
+    else if (event.data.subject === 'SPLICE.getState') {
+      const state = getStateOfProblem(iframe)
+      iframe.contentWindow.postMessage({ subject: 'SPLICE.getState.response', message_id: event.data.message_id, state }, '*')      
+    }    
   }, false);
   
   /*
@@ -231,7 +247,19 @@ window.addEventListener('DOMContentLoaded', () => {
     addProblemSelector(i, assignment.problems[i].title)
   }
   
+  if (assignment.noHeader) {
+	  document.getElementsByTagName('details')[0].style.display = 'none'
+  }
+
   if (assignment.isStudent) {
+    if('deadline' in assignment){
+      document.getElementById('deadline').textContent = "Deadline:"
+      let deadline = assignment.deadline
+      let deadlineUTC = new Date(deadline).toUTCString()
+      let deadlineLocal = new Date(Date.parse(deadline))
+      document.getElementById('deadlineLocal').textContent = deadlineLocal
+      document.getElementById('deadlineUTC').textContent = deadlineUTC + " (UTC)"
+    }
     if (lti === undefined) {
       document.getElementById('studentLTIInstructions').style.display = 'none'
       const returnToWorkURLSpan = document.getElementById('returnToWorkURL') 
@@ -299,5 +327,37 @@ window.addEventListener('DOMContentLoaded', () => {
     activateProblemSelection()
     document.getElementById('studentInstructions').style.display = 'none'
     document.getElementById('studentLTIInstructions').style.display = 'none'
-  }  
+  }
+  
+  if (assignment.isStudent) {
+    if (assignment?.comment !== "") 
+      document.getElementById('student_comment').textContent = assignment.comment
+    else
+      document.getElementById('student_comment_div').style.display = 'none'
+  }
+  else if (assignment.saveCommentURL) {
+    document.getElementById('instructor_comment').textContent = assignment?.comment
+    const submitButton = createButton('hc-command', 'Save Comment', async () => {
+      let request = {
+          assignmentID: assignment.assignmentID,
+          workID: assignment.workID, // undefined when isStudent
+          comment: document.getElementById('comment').value,
+      }
+      
+      submitButton.disabled = true
+      responseDiv.style.display = 'none'
+      try {
+        await postData(assignment.saveCommentURL, request)
+      } catch (e) {
+        responseDiv.textContent = e.message           
+        responseDiv.style.display = 'block'
+      }
+      submitButton.disabled = false    
+    })
+    document.getElementById('instructor_comment_div').appendChild(submitButton) 
+  } 
+  else {
+    document.getElementById('instructor_comment_div').style.display = 'none'
+  }
+
 })

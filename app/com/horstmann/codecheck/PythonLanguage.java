@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.ArrayList; 
 
 public class PythonLanguage implements Language {
 
@@ -51,7 +52,7 @@ public class PythonLanguage implements Language {
     @Override
     public Map<Path, String> writeTester(Path file, String contents, List<Calls.Call> calls, ResourceLoader resourceLoader) {
         String moduleName = moduleOf(file);
-        List<String> lines = Util.lines(contents);
+        List<String> lines = new ArrayList<>();
         int i = 0;
         lines.add(i++, "from sys import argv");
         lines.add(i++, "import " + moduleName);        
@@ -61,27 +62,9 @@ public class PythonLanguage implements Language {
             lines.add(i++, 
                     "    if argv[1] == \"" + (k + 1) + "\" :");
             lines.add(i++, 
-                    "        expected = "
-                     + call.name + "(" + call.args
-                    + ")");
-            lines.add(i++,
-                    "        print(expected)");
+                    "        result = " + moduleName + "." + call.name + "("  + call.args + ")");
             lines.add(i++, 
-                    "        actual = "
-                    + moduleName + "." + call.name + "("
-                    + call.args + ")");
-            lines.add(i++, 
-                    "        print(actual)");
-            lines.add(
-                    i++,
-                    "        if expected == actual :");
-            lines.add(i++, 
-                    "            print(\"true\")");
-            lines.add(
-                    i++,
-                    "        else :");
-            lines.add(i++, 
-                    "            print(\"false\")");
+                    "        print(result)");
         }
         lines.add("main()");
         Path p = pathOf(moduleName + "CodeCheck");        
@@ -95,13 +78,13 @@ public class PythonLanguage implements Language {
         return new String[] { "##", "" };
     }
 
-    private static Pattern varPattern = Pattern.compile("\\s*(?<name>[A-Za-z][A-Za-z0-9]*)\\s*=\\s*(?<rhs>.+)");
+    private static Pattern varPattern = Pattern.compile("(?<name>[A-Za-z][A-Za-z0-9]*)\\s*=\\s*(?<rhs>.+)");
     @Override public Pattern variableDeclPattern() { return varPattern; }
 
     private static Pattern errPattern = Pattern.compile("(?<msg>.*)[\"(](?<file>[A-Za-z0-9_]+\\.py)\"?, line (?<line>[0-9]+).*");    
     @Override public Pattern errorPattern() { return errPattern; }
     
-    public boolean isUnitTest(Path fileName) { return fileName.toString().matches(".*Test[0-9]*.py"); }
+    public boolean isUnitTest(Path fileName) { return fileName.toString().matches(".*(T|_t)est[0-9]*.py"); }
     
     private static final Pattern successPattern = Pattern.compile("Ran (?<runs>[0-9]+) tests? in [0-9.]+s\\s+OK");
     private static final Pattern failurePattern = Pattern.compile("Ran (?<runs>[0-9]+) tests? in [0-9.]+s\\s+FAILED \\([^=]+=(?<failures>[0-9]+)\\)");

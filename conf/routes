@@ -28,6 +28,8 @@ GET  /tracer/:repo/:problem		controllers.Files.tracer(request: Request, repo: St
 
 # Used by textbook-problems, cs046 Split, checknjs 
 GET  /fileData                controllers.Files.fileData(request: Request, repo: String ?= "ext", problem: String, ccid: String ?= null)
+GET  /fileData/:problem       controllers.Files.fileData(request: Request, repo: String ?= "ext", problem: String, ccid: String ?= null)
+GET  /fileData/:repo/:problem controllers.Files.fileData(request: Request, repo: String, problem: String, ccid: String ?= null)
 
 POST /uploadProblem                     controllers.Upload.uploadProblem(request: Request)
 POST /uploadFiles                       controllers.Upload.uploadFiles(request: Request)
@@ -43,6 +45,8 @@ GET	 /codecheck/files/:problem	controllers.Files.filesHTML(request: Request, rep
 POST /codecheck/check						controllers.Check.checkHTML(request: Request)
 # Used in Core Java for the Impatient 2e
 POST /check                     controllers.Check.checkHTML(request: Request)
+# Used in Core Java 13e/Core Java for the Impatient 4e
+POST /run                       controllers.Check.run(request: Request)
 
 # Assignments
 
@@ -72,15 +76,19 @@ GET  /private/viewSubmissions/:assignmentID/:key    controllers.Assignment.viewS
 
 # Instructor saves assignment
 POST /saveAssignment          controllers.Assignment.saveAssignment(request: Request)
+# Instructor saves feedback
+POST /saveComment          controllers.Assignment.saveComment(request: Request)
 # Student saves work
 POST /saveWork                controllers.Assignment.saveWork(request: Request)
 
-# LTI Launch (legacy with query param for ID)
+# LTI Launch (legacy with query param id)
 POST /lti/assignment          controllers.LTIAssignment.launch(request: Request, assignmentID: String = null)
 # LTI Launch 
 POST /assignment/:assignmentID controllers.LTIAssignment.launch(request: Request, assignmentID: String)
 # LTI Launch, in case someone posts a viewAssignment URL instead of cloning it 
 POST /viewAssignment/:assignmentID controllers.LTIAssignment.launch(request: Request, assignmentID: String)
+# Bridge (with query param url)
+POST /lti/bridge         controllers.LTIAssignment.launch(request: Request, assignmentID: String = null)
 
 # Student saves work 
 POST /lti/saveWork            controllers.LTIAssignment.saveWork(request: Request)

@@ -40,50 +40,24 @@ public class SMLLanguage implements Language {
         Path testFile = Paths.get("testCodeCheck.sml");
         StringBuilder out = new StringBuilder();
         out.append("use \"" + moduleName + ".sml\";\n");
-        out.append("structure Solution = struct\n");
-        out.append(contents);
-        out.append("\n");
-        out.append("end;\n");
-        out.append("fun eval expr = SOME (expr ()) handle exn => NONE ;\n");
-        out.append("fun comp expr1 expr2 = let\n");
-        out.append("    val actual = eval expr1\n");
-        out.append("    val expected = eval expr2\n");
-        out.append("  in\n");
-        out.append("    (case (actual, expected) of\n");
-        out.append("      (NONE, NONE) => \"exception\\nexception\\ntrue\\n\" |\n");
-        out.append("      (NONE, SOME y) => \"exception\\n\" ^ (PolyML.makestring y) ^ \"\\nfalse\\n\" |\n");
-        out.append("      (SOME x, NONE) => (PolyML.makestring x) ^ \"\\nexception\\nfalse\\n\" |\n");
-        out.append("      (SOME x, SOME y) => (PolyML.makestring x) ^ \"\\n\" ^ (PolyML.makestring y) ^ \"\\n\" ^ (PolyML.makestring (x = y)) ^ \"\\n\")\n");
-        out.append("end;\n");
-        out.append("fun main() = print (case hd(CommandLine.arguments()) of \n");
+        out.append("fun main() = print (PolyML.makestring (case hd(CommandLine.arguments()) of \n");
         for (int k = 0; k < calls.size(); k++) {
             Calls.Call call = calls.get(k);
             if (k < calls.size() - 1) 
-                out.append("  \"" + (k + 1) + "\" => comp (fn () => (Solution." + 
-                    call.name + " " + call.args + ")) (fn () => (" +
-                    call.name + " " + call.args + ")) |\n");
+                out.append("  \"" + (k + 1) + "\" => (" +
+                    call.name + " " + call.args + ") |\n");
             else 
-                out.append("  _ => comp (fn () => (Solution." + 
-                    call.name + " " + call.args + ")) (fn () => (" +
-                    call.name + " " + call.args + ")));\n");
+                out.append("  _ => (" +
+                    call.name + " " + call.args + ")) handle exn => \"exception\");\n");
         }            
         Map<Path, String> result = new HashMap<>();
         result.put(testFile, out.toString());
         return result;
     }
     
-    private static String variablePatternString = "\\s*val\\s+(?<name>\\p{javaJavaIdentifierStart}\\p{javaJavaIdentifierPart}*)\\s*=\\s*(?<rhs>.+)";
-    private static Pattern variablePattern = Pattern.compile(variablePatternString);
-
-    /*
-     * (non-Javadoc)
-     * 
-     * @see com.horstmann.codecheck.Language#variablePattern()
-     */
-    @Override
-    public Pattern variableDeclPattern() {
-        return variablePattern;
-    }
+    private static Pattern VARIABLE_DECL_PATTERN = Pattern.compile(
+    		"val\\s+(?<name>\\p{javaJavaIdentifierStart}\\p{javaJavaIdentifierPart}*)\\s*=\\s*(?<rhs>[^;]+);?");
+    @Override public Pattern variableDeclPattern() { return VARIABLE_DECL_PATTERN; }
    
    private static Pattern ERROR_PATTERN = Pattern.compile("(?<file>[^/]+\\.sml):(?<line>[0-9]+):(?<col>[0-9]+): (?<msg>.+)");
    @Override public Pattern errorPattern() { return ERROR_PATTERN; }     

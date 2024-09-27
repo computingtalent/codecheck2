@@ -521,6 +521,7 @@ public class Util {
         return params;
     }
 
+    // TODO: What about redirects?
     public static boolean exists(String url) {
         boolean result = false;
         try {
@@ -538,6 +539,7 @@ public class Util {
     
     // UIDs
     
+    // TODO Consider using https://github.com/scru128/spec
     public static String createPrivateUID() {
         return new BigInteger(128, generator).toString(36).toUpperCase();               
     }
@@ -554,18 +556,34 @@ public class Util {
 
     public static String createPronouncableUID() {
         StringBuilder result = new StringBuilder();
-        int len = 16;
-        int b = Util.generator.nextInt(2);
+        int len = 4;
         for (int i = 0; i < len; i++) {
-            String s = i % 2 == b ? Util.consonants : vowels;
-            int n = Util.generator.nextInt(s.length());
-            result.append(s.charAt(n));
-            if (i % 4 == 3 && i < len - 1) {
-                result.append('-');
-                b = Util.generator.nextInt(2);
-            }
+            if (i > 0) result.append("-");
+            result.append(generatePronounceableWord());
         }
         return result.toString();
+    }
+    
+    // generates a non-bad four-letter pronounceable word
+    // of the form vcvc or cvcv (c = consonant, v = vowel)
+    private static StringBuilder generatePronounceableWord() { 
+        StringBuilder word;
+        int len = 4;
+        int b = Util.generator.nextInt(2);
+        do {
+            word = new StringBuilder();
+            for (int i = 0; i < len; i++) { 
+                String s = i % 2 == b ? Util.consonants : vowels;
+                int n = Util.generator.nextInt(s.length());
+                word.append(s.charAt(n));
+            }
+        } while (isBadWord(word.toString())); // generate a word until we get a non bad word
+        
+        return word;
+    }
+    private static boolean isBadWord(String word){ 
+        String[] filteredOutWords = {"anal", "anus", "anil", "anes", "anis", "babe", "bozo", "coky", "dick", "dike", "dyke", "homo", "lube", "nude", "oral", "rape", "sexy", "titi", "wily"};
+        return Arrays.asList(filteredOutWords).contains(word);
     }
 
     public static boolean isPronouncableUID(String s) {

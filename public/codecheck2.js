@@ -1,3 +1,5 @@
+// Uses postData from util.js
+
 window.horstmann_config = {
   inIframe: function () {
     try {
@@ -7,35 +9,9 @@ window.horstmann_config = {
     } 
   },
 
-  postData: async function(url = '', data = {}) {
-    const response = await fetch(url, {
-      method: 'POST', // *GET, POST, PUT, DELETE, etc.
-      mode: 'cors', // no-cors, *cors, same-origin
-      cache: 'no-cache', // *default, no-cache, reload, force-cache, only-if-cached
-      credentials: 'include', // include, *same-origin, omit
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      redirect: 'follow', // manual, *follow, error
-      referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
-      body: JSON.stringify(data) // body data type must match "Content-Type" header
-    });
-    if (response.ok)
-      return await response.json() // parses JSON response into native JavaScript objects
-    else {
-      const body = await response.text()
-      if (response.status === 500) console.log(body)
-      const msg = 
-            response.status === 500 ? 'Server error' : 
-            response.status === 400 ? `Error: ${body}` : // Bad reqest
-            `Error ${response.status} ${response.statusText}: ${body}`    
-      throw new Error(msg)
-    }
-  },
-
   score_change_listener: (element, state, score) => {
     if ('lti' in horstmann_config) {
-      horstmann_config.postData(horstmann_config.lti.sendURL, { 
+      postData(horstmann_config.lti.sendURL, { 
         state, 
         score,
         lis_outcome_service_url: horstmann_config.lti.lis_outcome_service_url,
@@ -46,9 +22,15 @@ window.horstmann_config = {
     }
     else if (horstmann_config.inIframe()) {      
       const qid = horstmann_config.getInteractiveId(element) // TODO should be done by caller
-      const param = { state, score, qid }
-      const data = { query: 'send', param }
-      window.parent.postMessage(data, '*' )
+      // const param = { state, score, qid }
+      // const message = { query: 'send', param }
+      const message = {
+		subject: 'SPLICE.reportScoreAndState', 
+        message_id: horstmann_config.generateUUID(),
+        score,
+        state 
+	  }
+      window.parent.postMessage(message, '*' )
     }
   },
 
@@ -80,7 +62,7 @@ window.horstmann_config = {
   retrieve_state: async (element, callback) => {
     if ('lti' in horstmann_config) {
       try {
-        let response = await horstmann_config.postData(horstmann_config.lti.retrieveURL, {
+        let response = await postData(horstmann_config.lti.retrieveURL, {
           submissionID: horstmann_config.lti.submissionID
         })
         callback(element, response.state)
@@ -90,16 +72,20 @@ window.horstmann_config = {
       }
     }
     else if (horstmann_config.inIframe()) {
-      const nonce = horstmann_config.generateUUID()
-      horstmann_config.nonceMap[nonce] = callback
-      const qid = horstmann_config.getInteractiveId(element) // TODO should be done by caller
-      const param = { qid } 
-      const data = { query: 'retrieve', param, nonce }
-      window.parent.postMessage(data, '*')
+      const message_id = horstmann_config.generateUUID()
+      horstmann_config.nonceMap[message_id] = callback
+      // const qid = horstmann_config.getInteractiveId(element) // TODO should be done by caller
+      // const param = { qid } 
+      // const message = { query: 'retrieve', param, nonce }
+      const message = {
+		subject: 'SPLICE.getState', 
+        message_id
+	  } 
+      window.parent.postMessage(message, '*')
       const MESSAGE_TIMEOUT = 5000
       setTimeout(() => {
-        if ((nonce in horstmann_config.nonceMap)) { 
-          delete horstmann_config.nonceMap[nonce]
+        if ((message_id in horstmann_config.nonceMap)) { 
+          delete horstmann_config.nonceMap[message_id]
           callback(element, null)
         }
       }, MESSAGE_TIMEOUT)      
@@ -115,14 +101,11 @@ let _ = x => x
 document.addEventListener('DOMContentLoaded', function () {
   if (horstmann_config.inIframe()) {
     function receiveMessage(event) {
-      if (event.data.request) { // It's a response
-        const request = event.data.request    
-        if (request.query === 'retrieve') {
-          if (request.nonce in horstmann_config.nonceMap) {
-            // If not, already timed out
-            horstmann_config.nonceMap[request.nonce](null, event.data.param)
-            delete horstmann_config.nonceMap[request.nonce]
-          }
+      if (event.data.subject === 'SPLICE.getState.response') { 
+        if (event.data.message_id in horstmann_config.nonceMap) {
+          // If not, already timed out
+          horstmann_config.nonceMap[event.data.message_id](null, event.data.state)
+          delete horstmann_config.nonceMap[event.data.message_id]
         }
       }
     }
@@ -136,21 +119,30 @@ document.addEventListener('DOMContentLoaded', function () {
       setTimeout(() => { 
         let newDocHeight = document.documentElement.scrollHeight + document.documentElement.offsetTop
         if (docHeight != newDocHeight) {
-          docHeight = newDocHeight
-          const data = { query: 'docHeight', param: { docHeight } }
-          window.parent.postMessage(data, '*' )
+          // docHeight = newDocHeight
+          // const message = { query: 'docHeight', param: { docHeight } }
+          const message = {
+			subject: 'lti.frameResize', 
+            message_id: horstmann_config.generateUUID(),
+            height: newDocHeight,
+            width: document.documentElement.scrollWidth + document.documentElement.offsetLeft 
+		  }
+          window.parent.postMessage(message, '*' )
         } 
       }, SEND_DOCHEIGHT_DELAY)
     }  
 
-    document.body.style.height = '100%'
-    document.body.style.overflow = 'hidden'
+    // document.body.style.height = '100%'
+    // document.body.style.overflow = 'hidden'
     // ResizeObserver did not work          
     const mutationObserver = new MutationObserver(sendDocHeight);
     mutationObserver.observe(document.documentElement, { childList: true, subtree: true })    
     
-    const data = { query: 'retrieve', param: { } }  
-    window.parent.postMessage(data, '*' )
+    const message = {
+		subject: 'SPLICE.getState', 
+        message_id: horstmann_config.generateUUID()
+    } 
+    window.parent.postMessage(message, '*' )
   } else {
     // TODO: Ugly?
     // set in download.js, used when initializing the UI

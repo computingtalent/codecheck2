@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 import java.util.Map;
 import java.util.Properties;
+import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -24,7 +25,8 @@ import javax.script.ScriptEngineManager;
 import javax.script.ScriptException;
 
 import com.horstmann.codecheck.Main;
-import com.horstmann.codecheck.Report;
+import com.horstmann.codecheck.Plan;
+import com.horstmann.codecheck.Problem;
 import com.horstmann.codecheck.ResourceLoader;
 import com.horstmann.codecheck.Util;
 import com.typesafe.config.Config;
@@ -36,14 +38,12 @@ import play.api.Environment;
 @Singleton
 public class CodeCheck {
     private static Logger.ALogger logger = Logger.of("com.horstmann.codecheck");    
-    private Config config;
-    private S3Connection s3conn;
+    private ProblemConnector probConn;
     private JarSigner signer;
     private ResourceLoader resourceLoader;
     
-    @Inject public CodeCheck(Config config, S3Connection s3conn, Environment playEnv) {
-        this.config = config;
-        this.s3conn = s3conn;
+    @Inject public CodeCheck(Config config, ProblemConnector probConn, Environment playEnv) {
+        this.probConn = probConn;
         resourceLoader = new ResourceLoader() {
             @Override
             public InputStream loadResource(String path) throws IOException {
@@ -62,7 +62,7 @@ public class CodeCheck {
             KeyStore.PrivateKeyEntry pkEntry = (KeyStore.PrivateKeyEntry) ks.getEntry("codecheck", protParam);
             signer = new JarSigner.Builder(pkEntry).build();            
         } catch (Exception e) {
-            logger.warn("Cannot load keystore", e);
+            logger.warn("Cannot load keystore");
         }
     }
     
@@ -73,7 +73,13 @@ public class CodeCheck {
         return problemFiles;
     }
 
-    public void replaceParametersInDirectory(String studentId, Map<Path, byte[]> problemFiles)
+    /**
+     * 
+     * @param studentId the seed for the random number generator
+     * @param problemFiles the problem files to rewrite
+     * @return true if this is a parametric problem
+     */
+    public boolean replaceParametersInDirectory(String studentId, Map<Path, byte[]> problemFiles)
             throws ScriptException, NoSuchMethodException, IOException {
         Path paramPath = Path.of("param.js"); 
         if (problemFiles.containsKey(paramPath)) {
@@ -84,13 +90,15 @@ public class CodeCheck {
             //seeding unique student id
             ((Invocable) engine).invokeMethod(engine.get("Math"), "seedrandom", studentId);
             engine.eval(Util.getString(problemFiles, paramPath));
-            for (Path p : Util.filterNot(problemFiles.keySet(), "*.jar", "*.gif", "*.png", "*.jpg", "*.wav")) {
+            for (Path p : Util.filterNot(problemFiles.keySet(), "param.js", "*.jar", "*.gif", "*.png", "*.jpg", "*.wav")) {
                 String contents = new String(problemFiles.get(p), StandardCharsets.UTF_8);
                 String result = replaceParametersInFile(contents, engine);
                 if (result != null)
                     problemFiles.put(p, result.getBytes(StandardCharsets.UTF_8));               
             }
+            return true;
         }
+        else return false;
     }
     
     private String replaceParametersInFile(String contents, ScriptEngine engine) throws ScriptException, IOException {
@@ -128,29 +136,77 @@ public class CodeCheck {
     }
     
     public Map<Path, byte[]> loadProblem(String repo, String problemName) throws IOException {
-        if (s3conn.isOnS3(repo)) {
-            return Util.unzip(s3conn.readFromS3(repo, problemName));
-        } else {
-            Path repoPath = Path.of(config.getString("com.horstmann.codecheck.repo."
-                            + repo));
-            // TODO: That comes from Problems.java--fix it there
-            if (problemName.startsWith("/"))
-                problemName = problemName.substring(1);
-            return Util.descendantFiles(repoPath.resolve(problemName));         
-        }
+        Map<Path, byte[]> result;
+        byte[] zipFile = probConn.read(repo, problemName);
+        result = Util.unzip(zipFile);
+        return result;
     }
-    
-    public Report run(String reportType, String repo,
+
+    public void saveProblem(String repo, String problem, Map<Path, byte[]> problemFiles) throws IOException {   
+        byte[] problemZip = Util.zip(problemFiles);
+        probConn.write(problemZip, repo, problem);  
+    }
+
+    public String run(String reportType, String repo,
             String problem, String ccid, Map<Path, String> submissionFiles)
             throws IOException, InterruptedException, NoSuchMethodException, ScriptException {
         Map<Path, byte[]> problemFiles = loadProblem(repo, problem, ccid);
+        // Save solution outputs if not parametric and doesn't have already have solution output
+        boolean save = !problemFiles.containsKey(Path.of("param.js")) && 
+            !problemFiles.keySet().stream().anyMatch(p -> p.startsWith("_outputs"));
         Properties metaData = new Properties();
         metaData.put("User", ccid);
         metaData.put("Problem", (repo + "/" + problem).replaceAll("[^\\pL\\pN_/-]", ""));
         
-        return new Main().run(submissionFiles, problemFiles, reportType, metaData, resourceLoader);
+        Plan plan = new Main().run(submissionFiles, problemFiles, reportType, metaData, resourceLoader);
+        if (save) {
+            plan.writeSolutionOutputs(problemFiles);
+            saveProblem(repo, problem, problemFiles);
+        }
+
+        return plan.getReport().getText();
     }
     
+    /**
+     * Run files with given input 
+     * @return the report of the run
+     */
+    public String run(String reportType, Map<Path, String> submissionFiles)
+            throws IOException, InterruptedException, NoSuchMethodException, ScriptException {
+        Map<Path, byte[]> problemFiles = new TreeMap<>();
+        for (var entry : submissionFiles.entrySet()) {
+        	var key = entry.getKey();
+        	problemFiles.put(key, entry.getValue().getBytes());
+        }
+        Properties metaData = new Properties();
+        Plan plan = new Main().run(submissionFiles, problemFiles, reportType, metaData, resourceLoader);
+        return plan.getReport().getText();
+    }    
+    
+    /**
+        Runs CodeCheck for checking a problem submission. 
+        Saves the problem and the precomputed solution runs.
+     */
+    public String checkAndSave(String problem, Map<Path, byte[]> originalProblemFiles)
+            throws IOException, InterruptedException, NoSuchMethodException, ScriptException {
+        Map<Path, byte[]> problemFiles = new TreeMap<>(originalProblemFiles);
+        String studentId = com.horstmann.codecheck.Util.createPronouncableUID();
+        boolean isParametric = replaceParametersInDirectory(studentId, problemFiles);
+
+        Problem p = new Problem(problemFiles);
+        Map<Path, String> submissionFiles = new TreeMap<>();
+        for (Map.Entry<Path, byte[]> entry : p.getSolutionFiles().entrySet()) 
+            submissionFiles.put(entry.getKey(), new String(entry.getValue(), StandardCharsets.UTF_8));          
+        for (Map.Entry<Path, byte[]> entry : p.getInputFiles().entrySet()) 
+            submissionFiles.put(entry.getKey(), new String(entry.getValue(), StandardCharsets.UTF_8));          
+
+        Properties metaData = new Properties();
+        Plan plan = new Main().run(submissionFiles, problemFiles, "html", metaData, resourceLoader);
+        if (!isParametric)
+            plan.writeSolutionOutputs(problemFiles);
+        saveProblem("ext", problem, originalProblemFiles);
+        return plan.getReport().getText(); 
+    }
     
     public byte[] signZip(Map<Path, byte[]> contents) throws IOException {  
         if (signer == null) return Util.zip(contents);

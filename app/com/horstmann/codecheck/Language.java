@@ -25,7 +25,10 @@ public interface Language {
        new CSharpLanguage(),
        new HaskellLanguage(),
        new SMLLanguage(),
-       new DartLanguage()
+       new DartLanguage(),
+       new RustLanguage(),
+       new BashLanguage(),
+       new KotlinLanguage()
     };
 
     static Language languageFor(Set<Path> files) {
@@ -116,7 +119,7 @@ public interface Language {
         if (fileName == null) return false;
         String moduleName = moduleOf(fileName);
         if (moduleName == null) return false;
-        return moduleName.matches(".*Tester[0-9]*");
+        return moduleName.matches(".*(T|_t)ester[0-9]*");
     }
 
     /**
@@ -180,16 +183,19 @@ public interface Language {
     Pattern variableDeclPattern();
 
     /**
-     * Gets the separator between substitutions in SUB
+     * Gets the separator regex between substitutions in SUB
      * @return
      */
-    default String substitutionSeparator() { return ";"; }
+    default Pattern substitutionSeparator() { return Pattern.compile("\\s*;\\s*"); }
     
     default Pattern unitTestSuccessPattern() { return Pattern.compile("$."); }
     default Pattern unitTestFailurePattern() { return Pattern.compile("$."); }
     
-    default void reportUnitTest(String result, Report report, Score score) {
-        report.output(result);
+    default void reportUnitTest(String result, Report report, Score score, boolean hidden) {
+        if (hidden == false)
+            report.output(result);
+        else 
+            report.hiddenOutputMessage(); 
         Matcher matcher = unitTestSuccessPattern().matcher(result);
         if (matcher.find()) {
            int runs = Integer.parseInt(matcher.group("runs"));

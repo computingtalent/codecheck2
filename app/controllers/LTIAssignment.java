@@ -21,7 +21,7 @@ import com.horstmann.codecheck.Util;
 
 import models.JWT;
 import models.LTI;
-import models.S3Connection;
+import models.AssignmentConnector;
 import oauth.signpost.exception.OAuthCommunicationException;
 import oauth.signpost.exception.OAuthExpectationFailedException;
 import oauth.signpost.exception.OAuthMessageSignerException;
@@ -42,7 +42,7 @@ TODO: Can/should this be replaced with JWT?
 
 
 public class LTIAssignment extends Controller {
-    @Inject private S3Connection s3conn;
+    @Inject private AssignmentConnector assignmentConn;
     @Inject private LTI lti;
     @Inject private JWT jwt;
     private static Logger.ALogger logger = Logger.of("com.horstmann.codecheck");
@@ -63,7 +63,7 @@ public class LTIAssignment extends Controller {
             int i = resourceID.lastIndexOf(" ");
             return resourceID.substring(i + 1);
         } else {
-            ObjectNode resourceNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckLTIResources", "resourceID", resourceID); 
+            ObjectNode resourceNode = assignmentConn.readJsonObjectFromDB("CodeCheckLTIResources", "resourceID", resourceID); 
             if (resourceNode == null) return null;
             return resourceNode.get("assignmentID").asText();
         }
@@ -117,13 +117,13 @@ public class LTIAssignment extends Controller {
             }
     
             assignmentID = params.get("assignmentID").asText();
-            ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+            ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
             String editKey = params.get("editKey").asText();
             
             if (assignmentNode != null && !editKey.equals(assignmentNode.get("editKey").asText())) 
                 return badRequest("Edit keys do not match");        
     
-            s3conn.writeJsonObjectToDynamoDB("CodeCheckAssignments", params);
+            assignmentConn.writeJsonObjectToDB("CodeCheckAssignments", params);
         }
 
         ObjectNode result = JsonNodeFactory.instance.objectNode();
@@ -138,10 +138,10 @@ public class LTIAssignment extends Controller {
     @Security.Authenticated(Secured.class) // Instructor
     public Result viewSubmissions(Http.Request request) throws IOException {
         String resourceID = request.queryString("resourceID").orElse(null);
-        Map<String, ObjectNode> itemMap = s3conn.readJsonObjectsFromDynamoDB("CodeCheckWork", "assignmentID", resourceID, "workID");
+        Map<String, ObjectNode> itemMap = assignmentConn.readJsonObjectsFromDB("CodeCheckWork", "assignmentID", resourceID, "workID");
         String assignmentID = assignmentOfResource(resourceID);
         
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+        ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
         if (assignmentNode == null) return badRequest("Assignment not found");
 
         ArrayNode submissions = JsonNodeFactory.instance.arrayNode();
@@ -164,10 +164,10 @@ public class LTIAssignment extends Controller {
     public Result viewSubmission(Http.Request request) throws IOException {
         String resourceID = request.queryString("resourceID").orElse(null);
         String workID = request.queryString("workID").orElse(null);
-        String work = s3conn.readJsonStringFromDynamoDB("CodeCheckWork", "assignmentID", resourceID, "workID", workID);
+        String work = assignmentConn.readJsonStringFromDB("CodeCheckWork", "assignmentID", resourceID, "workID", workID);
         if (work == null) return badRequest("Work not found");
         String assignmentID = assignmentOfResource(resourceID);
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+        ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
         if (assignmentNode == null) return badRequest("Assignment not found");
         ArrayNode groups = (ArrayNode) assignmentNode.get("problems");
         assignmentNode.set("problems", groups.get(Math.abs(workID.hashCode()) % groups.size()));
@@ -178,13 +178,36 @@ public class LTIAssignment extends Controller {
     @Security.Authenticated(Secured.class) // Instructor
     public Result editAssignment(Http.Request request, String assignmentID) throws IOException {
         String editKey = request.session().get("user").get(); // TODO orElseThrow();    
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+        ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
         if (assignmentNode == null) return badRequest("Assignment not found");
         
         if (!editKey.equals(assignmentNode.get("editKey").asText())) 
             return badRequest("Edit keys don't match");
         assignmentNode.put("saveURL", "/lti/saveAssignment");       
         return ok(views.html.editAssignment.render(assignmentNode.toString(), false));      
+    }
+
+    private static ObjectNode bridgeAssignment(String url) {
+    	ObjectNode assignment = JsonNodeFactory.instance.objectNode();
+    	assignment.put("id", url);
+    	assignment.put("editKey", "");
+    	assignment.put("noHeader", true); // TODO for now
+        ArrayNode groups = JsonNodeFactory.instance.arrayNode();
+    	ArrayNode problems = JsonNodeFactory.instance.arrayNode();
+    	ObjectNode problem = JsonNodeFactory.instance.objectNode();
+    	problem.put("URL", url);
+    	problem.put("weight", 1);
+    	problems.add(problem);
+    	groups.add(problems);
+    	assignment.set("problems", groups);
+    	return assignment;
+    }
+    
+    private static Pattern isBridgeAssignment = Pattern.compile("^https?://.*$");
+    
+    private ObjectNode getAssignmentNode(String assignmentID) throws IOException {
+    	if (isBridgeAssignment.matcher(assignmentID).matches()) return bridgeAssignment(assignmentID);
+    	else return assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID); 
     }
     
     public Result launch(Http.Request request, String assignmentID) throws IOException {    
@@ -202,22 +225,23 @@ public class LTIAssignment extends Controller {
 
         String userLMSID = toolConsumerID + "/" + userID;
 
+        if (assignmentID == null) //TODO: Query string id legacy
+            assignmentID = request.queryString("id").orElse(null);
+        if (assignmentID == null) // Bridge
+            assignmentID = request.queryString("url").orElse(null);
+
         ObjectNode ltiNode = JsonNodeFactory.instance.objectNode();
         // TODO: In order to facilitate search by assignmentID, it would be better if this was the other way around
         String resourceID = toolConsumerID + "/" + contextID + " " + assignmentID; 
         String legacyResourceID = toolConsumerID + "/" + contextID + "/" + resourceLinkID; 
-        ObjectNode resourceNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckLTIResources", "resourceID", legacyResourceID); 
+        ObjectNode resourceNode = assignmentConn.readJsonObjectFromDB("CodeCheckLTIResources", "resourceID", legacyResourceID); 
         if (resourceNode != null) resourceID = legacyResourceID;
         
-        //TODO: Query string legacy
-        if (assignmentID == null)
-            assignmentID = request.queryString("id").orElse(null);
-
         if (assignmentID == null) {
             return badRequest("No assignment ID");
         } 
+        ObjectNode assignmentNode = getAssignmentNode(assignmentID);
         if (isInstructor(postParams)) {     
-            ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
             if (assignmentNode == null) return badRequest("Assignment not found");
             ArrayNode groups = (ArrayNode) assignmentNode.get("problems");
             assignmentNode.set("problems", groups.get(0));
@@ -236,7 +260,6 @@ public class LTIAssignment extends Controller {
                 .withNewSession()
                 .addingToSession(request, "user", userLMSID);
         } else { // Student
-            ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
             if (assignmentNode == null) return badRequest("Assignment not found");
             ArrayNode groups = (ArrayNode) assignmentNode.get("problems");
             assignmentNode.set("problems", groups.get(Math.abs(userID.hashCode()) % groups.size()));
@@ -258,7 +281,7 @@ public class LTIAssignment extends Controller {
             ltiNode.put("oauthConsumerKey", oauthConsumerKey);
             ltiNode.put("jwt", jwt.generate(Map.of("resourceID", resourceID, "userID", userID)));
 
-            ObjectNode workNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckWork", "assignmentID", resourceID, "workID", userID);
+            ObjectNode workNode = assignmentConn.readJsonObjectFromDB("CodeCheckWork", "assignmentID", resourceID, "workID", userID);
             String work = "";
             if (workNode == null) 
                 work = "{ problems: {} }";
@@ -281,10 +304,10 @@ public class LTIAssignment extends Controller {
     public Result allSubmissions(Http.Request request) throws IOException {
         String resourceID = request.queryString("resourceID").orElse(null);
         if (resourceID == null) return badRequest("Assignment not found");
-        Map<String, ObjectNode> itemMap = s3conn.readJsonObjectsFromDynamoDB("CodeCheckWork", "assignmentID", resourceID, "workID");
+        Map<String, ObjectNode> itemMap = assignmentConn.readJsonObjectsFromDB("CodeCheckWork", "assignmentID", resourceID, "workID");
         String assignmentID = assignmentOfResource(resourceID);
         
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+        ObjectNode assignmentNode = assignmentConn.readJsonObjectFromDB("CodeCheckAssignments", "assignmentID", assignmentID);
         if (assignmentNode == null) return badRequest("Assignment not found");
 
         ObjectNode submissions = JsonNodeFactory.instance.objectNode();
@@ -319,9 +342,9 @@ public class LTIAssignment extends Controller {
             submissionNode.put("submittedAt", now.toString());
             submissionNode.put("state", problemsNode.get(problemID).get("state").toString());
             submissionNode.put("score", problemsNode.get(problemID).get("score").asDouble());
-            s3conn.writeJsonObjectToDynamoDB("CodeCheckSubmissions", submissionNode);
+            assignmentConn.writeJsonObjectToDB("CodeCheckSubmissions", submissionNode);
             
-            ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+            ObjectNode assignmentNode = getAssignmentNode(assignmentID);
             if (assignmentNode.has("deadline")) {
                 try {
                     Instant deadline = Instant.parse(assignmentNode.get("deadline").asText());
@@ -332,12 +355,14 @@ public class LTIAssignment extends Controller {
                 }
             }
             result.put("submittedAt", now.toString());      
-
-            s3conn.writeNewerJsonObjectToDynamoDB("CodeCheckWork", workNode, "assignmentID", "submittedAt");
-            submitGradeToLMS(requestNode, (ObjectNode) requestNode.get("work"), result);
+            if (assignmentConn.writeNewerJsonObjectToDB("CodeCheckWork", workNode, "assignmentID", "submittedAt")) {
+                // Don't submit grade if this is an older submission
+                submitGradeToLMS(requestNode, (ObjectNode) requestNode.get("work"), result);
+            }
             return ok(result);
         } catch (Exception e) {
-            logger.error("saveWork: " + requestNode + " " + e.getMessage());
+            logger.error("saveWork: " + requestNode); 
+            logger.error(Util.getStackTrace(e));
             return badRequest("saveWork: " + requestNode);
         }
     }   
@@ -355,7 +380,7 @@ public class LTIAssignment extends Controller {
             String userID = claims.get("userID").toString();
             String resourceID = claims.get("resourceID").toString();
             
-            ObjectNode workNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckWork", "assignmentID", resourceID, "workID", userID);
+            ObjectNode workNode = assignmentConn.readJsonObjectFromDB("CodeCheckWork", "assignmentID", resourceID, "workID", userID);
             if (workNode == null) return badRequest("Work not found");
             submitGradeToLMS(requestNode, workNode, result);
             String outcome = result.get("outcome").asText();
@@ -379,7 +404,7 @@ public class LTIAssignment extends Controller {
         String resourceID = work.get("assignmentID").asText();
         String assignmentID = assignmentOfResource(resourceID); 
         
-        ObjectNode assignmentNode = s3conn.readJsonObjectFromDynamoDB("CodeCheckAssignments", "assignmentID", assignmentID);
+        ObjectNode assignmentNode = getAssignmentNode(assignmentID);
         double score = Assignment.score(assignmentNode, work);
         result.put("score", score);     
         

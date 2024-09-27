@@ -12,15 +12,34 @@ window.addEventListener('DOMContentLoaded', () => {
       }      
     }
     return result
-  }  
-  
+  }
+
+  let field = document.querySelector('#deadlineDate')
+  deadlineDate.addEventListener('input', function() {
+    let date = field.value
+    document.getElementById('deadlineDate').value = date
+    const local = document.getElementById('deadlineLocal')
+    const utc = document.getElementById('deadlineUTC')
+    if (date === '') {
+      local.style.display = "none"
+      utc.style.display = "none"
+    } else {
+      let date = document.getElementById('deadlineDate').value
+      let deadlineLocal = new Date(date)
+      let deadlineUTC = new Date(deadlineLocal).toUTCString() 
+      local.textContent = deadlineLocal
+      utc.textContent = deadlineUTC + " (UTC)"
+      local.style.display = "block"
+      utc.style.display = "block"
+    }
+  })
+
   const responseDiv = document.getElementById('response')
   if ('problems' in assignment)  
     document.getElementById('problems').value = format(assignment.problems)
   if (askForDeadline) {
     if ('deadline' in assignment) { // an ISO 8601 string like "2020-12-01T23:59:59Z"
-      document.getElementById('deadlineDate').value = assignment.deadline.substring(0, 10)
-      document.getElementById('deadlineTime').value = assignment.deadline.substring(11, 16)      
+      document.getElementById('deadlineDate').value = assignment.deadline
     } 
   } else {  
     const deadlineDiv = document.getElementById('deadlineDiv')
@@ -35,10 +54,9 @@ window.addEventListener('DOMContentLoaded', () => {
       }
       
     if (askForDeadline) {
-      const deadlineDate = document.getElementById('deadlineDate').value
-      const deadlineTime = document.getElementById('deadlineTime').value
-      if (deadlineDate != '' && deadlineTime != '')
-        request.deadline =  deadlineDate + 'T' + deadlineTime + ':59Z'        
+      if(document.getElementById('deadlineDate').value !== ''){
+        request.deadline = new Date(document.getElementById('deadlineDate').value).toISOString()
+      }
     }
     submitButton.disabled = true
     responseDiv.style.display = 'none'

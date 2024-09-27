@@ -58,7 +58,7 @@ public class JSONReport implements Report {
         public String score; // TODO: Score each item
     }
     
-    private ReportData data = new ReportData();
+    protected ReportData data = new ReportData();
     private Section section;    
     private Run run; 
     
@@ -143,8 +143,7 @@ public class JSONReport implements Report {
 
     @Override
     public JSONReport args(String args) {
-        // TODO: Would like to skip if no args
-        // if (args == null || args.trim().length() == 0) return this;
+        if (args == null || args.trim().length() == 0) return this;
         run.args = new ArrayList<>();
         run.args.add(new Item("Command line arguments", args));
         return this;
@@ -165,19 +164,23 @@ public class JSONReport implements Report {
     }
     
     @Override
-    public JSONReport image(String caption, BufferedImage image) throws IOException {
+    public JSONReport image(String caption, BufferedImage image) {
         if (image == null) return this;
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ImageIO.write(image, "PNG", out);
-        out.close();
-        byte[] pngBytes = out.toByteArray();
-        String data = Base64.getEncoder().encodeToString(pngBytes);
-        run.images.add(new Item(caption, data));
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(image, "PNG", out);
+            out.close();
+            byte[] pngBytes = out.toByteArray();
+            String data = Base64.getEncoder().encodeToString(pngBytes);
+            run.images.add(new Item(caption, data));
+        } catch (Exception ex) {
+            run.images.add(new Item(caption, null));
+        }
         return this;
     }
 
     @Override
-    public JSONReport image(BufferedImage image) throws IOException {
+    public JSONReport image(BufferedImage image) {
         image("", image);
         return this;
     }
@@ -207,22 +210,15 @@ public class JSONReport implements Report {
     }
 
     @Override
-    public JSONReport save(Path dir, String out) throws IOException {
-        Path outPath = dir.resolve(out + ".json");
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.setSerializationInclusion(Include.NON_DEFAULT);
-        mapper.writeValue(outPath.toFile(), data);
-        // JSON.std.write(data, outPath.toFile());
-        return this;
-    }
-    
+    public String extension() { return "json"; }
+
     @Override
     public String getText() { 
         ObjectMapper mapper = new ObjectMapper();
         mapper.setSerializationInclusion(Include.NON_DEFAULT);        
         try {
             return mapper.writeValueAsString(data);
-        } catch (JsonProcessingException e) {           
+        } catch (JsonProcessingException e) {    
             return null;
         }
     }
@@ -363,6 +359,15 @@ public class JSONReport implements Report {
     @Override
     public JSONReport comment(String key, String value) {
         data.metaData.put(key, value);
+        return this;
+    }
+
+    @Override
+    public JSONReport hiddenOutputMessage() {
+        //data.metaData.put("Given the instructions from your instructor, the output is hidden!");
+        StringBuilder builder = new StringBuilder();
+        builder.append("[hidden]"); 
+        run.html = builder.toString();
         return this;
     }
 

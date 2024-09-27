@@ -86,7 +86,7 @@ sudo -u $COMRUN_USER nice -15 ./runsolution 2>&1
 if [[ -z $DEBUG ]] ; then
   sudo -u $COMRUN_USER rm -rf solution*
 fi
-sudo -u $COMRUN_USER nice -15 ./runsubmission 2>&1
+sudo -E -u $COMRUN_USER nice -15 ./runsubmission 2>&1
 
 mkdir -p out # In case there is no out
 

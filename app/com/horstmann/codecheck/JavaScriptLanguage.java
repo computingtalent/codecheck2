@@ -2,7 +2,6 @@ package com.horstmann.codecheck;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -46,41 +45,20 @@ public class JavaScriptLanguage implements Language {
         Set<String> functionNames = new TreeSet<>();
         for (Calls.Call call : calls) functionNames.add(call.name);
         List<String> lines = new ArrayList<>();
-        lines.add("const codecheck = require('./codecheck.js')"); // TODO: Update to ECMAScript module
-        lines.add("const studentFunctions = function(){");
         lines.addAll(Util.lines(contents));
-        lines.add("return {");
-        for (String functionName : functionNames)
-            lines.add(functionName + ", ");
-        lines.add("}}()");
-        lines.add("const solutionFunctions = function(){");
-        lines.addAll(Util.lines(contents));
-        lines.add("return {");
-        for (String functionName : functionNames)
-            lines.add(functionName + ", ");
-        lines.add("}}()");
-        
         for (int k = 0; k < calls.size(); k++) {
             Calls.Call call = calls.get(k);
             lines.add("if (process.argv[process.argv.length - 1] === '" + (k + 1) + "') {");
-            lines.add("const actual = studentFunctions." + call.name + "(" + call.args + ")");
-            lines.add("const expected = solutionFunctions." + call.name + "(" + call.args + ")");
-            lines.add("console.log(JSON.stringify(expected))");
-            lines.add("console.log(JSON.stringify(actual))");
-            lines.add("console.log(codecheck.deepEquals(actual, expected))");
+            lines.add("const result = " + call.name + "(" + call.args + ")");
+            lines.add("console.log(JSON.stringify(result))");
             lines.add("}");            
         }
         Map<Path, String> paths = new LinkedHashMap<>();
         paths.put(pathOf(moduleName + "CodeCheck"), Util.join(lines, "\n"));
-        paths.put(Paths.get("codecheck.js"), resourceLoader.loadResourceAsString("codecheck.js")); // TODO mjs when we support ECMAScript modules
         return paths;
     }
 
-    private static String patternString = "(var|const|let)\\s+(?<name>[A-Za-z][A-Za-z0-9]*)\\s*=(?<rhs>[^;]+);?";
-    private static Pattern pattern = Pattern.compile(patternString);
-
-    @Override
-    public Pattern variableDeclPattern() {
-        return pattern;
-    }    
+    private static Pattern VARIABLE_DECL_PATTERN = Pattern.compile(
+        	"(var|const|let)\\s+(?<name>[A-Za-z][A-Za-z0-9]*)\\s*=(?<rhs>[^;]+);?");
+    @Override public Pattern variableDeclPattern() { return VARIABLE_DECL_PATTERN; }
 }

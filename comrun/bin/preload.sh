@@ -1,12 +1,11 @@
 #!/bin/bash
 
 # TODO get env dynamically
-JAVA_HOME=/opt/jdk1.8.0
 CODECHECK_HOME=/opt/codecheck
-PATH=$PATH:$JAVA_HOME/bin
 MAXOUTPUTLEN=10000
 
 BASE=$(pwd)
+PATH=$PATH:/usr/lib/kotlinc/bin
 
 # args: dir sourceDir sourceDir ...
 function prepare {
@@ -27,7 +26,7 @@ function compile {
   mkdir -p $BASE/out/$DIR  
   case _"$LANG" in 
     _C)
-      gcc -std=c99 -g -o prog -lm $@ > $BASE/out/$DIR/_compile 2>&1
+      gcc -std=c99 -g -o prog $@ -lm > $BASE/out/$DIR/_compile 2>&1
       ;;
     _Cpp)
       g++ -std=c++17 -Wall -Wno-sign-compare -g -o prog $@ 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile
@@ -42,9 +41,9 @@ function compile {
       ghc -o prog $@ > $BASE/out/$DIR/_compile 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile
       ;;
     _Java)
-      javac -cp .:$BASE/use/\*.jar $@ > $BASE/out/$DIR/_compile 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile
+      javac -cp .:$BASE/use/\* $@ > $BASE/out/$DIR/_compile 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile
       ;;
-    _JavaScript|_Matlab)
+    _Bash|_JavaScript|_Matlab)
       touch $BASE/out/$DIR/_compile
       ;;
     _Racket)
@@ -54,10 +53,16 @@ function compile {
       python3 -m py_compile $@ 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile
       ;;
     _Scala)
-      PATH=$PATH:$JAVA_HOME/bin $SCALA_HOME/bin/scalac $@ 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile   
+      scalac $@ 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile   
       ;;
+    _Kotlin)
+       kotlinc $@ 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile   
+       ;;
     _SML)
       polyc -o prog $1 > $BASE/out/$DIR/_compile 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_compile
+      ;;
+    _Rust)
+      rustc -g -o prog $1 > $BASE/out/$DIR/_compile 2>&1
       ;;
     *)  
       echo Unknown language $LANG > $BASE/out/$DIR/_errors 
@@ -88,7 +93,7 @@ function run {
   cd $BASE/$DIR
   mkdir -p $BASE/out/$ID
   case _"$LANG" in 
-    _C|_Cpp|_Dart|_Haskell|_SML)
+    _C|_Cpp|_Dart|_Haskell|_Rust)
       ulimit -d 100000 -f 1000 -n 100 -v 100000
       if [[ -e prog ]] ; then
         if [[ $INTERLEAVEIO == "true" ]] ; then
@@ -98,19 +103,44 @@ function run {
         fi
       fi
       ;;
+    _SML)
+      ulimit -d 1000000 -f 1000 -n 100 -v 1000000
+      if [[ -e prog ]] ; then
+        if [[ $INTERLEAVEIO == "true" ]] ; then
+           timeout -v -s 9 ${TIMEOUT}s ${CODECHECK_HOME}/interleaveio.py ./prog $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
+        else 
+           timeout -v -s 9 ${TIMEOUT}s ./prog $@ < $BASE/in/$ID > $BASE/out/$ID/_run 2>&1
+        fi
+      fi
+      ;;
     _Java)
-      # ulimit -d 1000000 -f 1000 -n 100 -v 10000000
+      ulimit -d 1000000 -f 1000 -n 100 -v 10000000
       if [[ -e  ${MAIN/.java/.class} ]] ; then
         if [[ $INTERLEAVEIO == "true" ]] ; then
-          timeout -v -s 9 ${TIMEOUT}s ${CODECHECK_HOME}/interleaveio.py java -ea -Djava.awt.headless=true -Dcom.horstmann.codecheck -cp .:$BASE/use/\*.jar ${MAIN/.java/} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
+          timeout -v -s 9 ${TIMEOUT}s ${CODECHECK_HOME}/interleaveio.py java -ea -Djava.awt.headless=true -Dcom.horstmann.codecheck -cp .:$BASE/use/\* ${MAIN/.java/} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
           cat hs_err*log >> $BASE/out/$ID/_run 2> /dev/null
           rm -f hs_err*log
         else
-          timeout -v -s 9 ${TIMEOUT}s java -ea -Djava.awt.headless=true -Dcom.horstmann.codecheck -cp .:$BASE/use/\*.jar ${MAIN/.java/} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
+          timeout -v -s 9 ${TIMEOUT}s java -ea -Djava.awt.headless=true -Dcom.horstmann.codecheck -cp .:$BASE/use/\* ${MAIN/.java/} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
           cat hs_err*log >> $BASE/out/$ID/_run 2> /dev/null
           rm -f hs_err*log          
         fi
       fi
+      ;;
+    _Bash)
+      ulimit -d 10000 -f 1000 -n 100 -v 100000 
+      if [[ -e premain.sh ]] ; then    
+        TMPFILE=$(mktemp)
+        echo "chmod -r main.sh" >> $TMPFILE
+        cat premain.sh >> $TMPFILE
+        echo -e "\n" >>  $TMPFILE
+        cat $MAIN >> $TMPFILE
+        rm premain.sh
+        mv $TMPFILE $MAIN
+      fi
+      chmod +x *.sh
+      timeout -v -s 9 ${TIMEOUT}s bash $MAIN $@  < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN >> $BASE/out/$ID/_run
+      cat $BASE/out/$ID/_run
       ;;
     _CSharp)
       ulimit -d 10000 -f 1000 -n 100 -v 100000 
@@ -130,6 +160,7 @@ function run {
       ;;
     _Python)
       ulimit -d 100000 -f 1000 -n 100 -v 100000
+      export CODECHECK=true
       if [[ -n $BASE/out/$DIR/_errors ]] ; then
         if [[ $INTERLEAVEIO == "true" ]] ; then
            timeout -v -s 9 ${TIMEOUT}s ${CODECHECK_HOME}/interleaveio.py python3 $MAIN $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
@@ -139,7 +170,7 @@ function run {
       fi
       ;;
     _Racket)
-      ulimit -d 100000 -f 1000 -n 100 -v 1000000
+      ulimit -d 1000000 -f 1000 -n 100 -v 1000000
       if grep -qE '\(define\s+\(\s*main\s+' $MAIN ; then
         timeout -v -s 9 ${TIMEOUT}s racket -tm $MAIN $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN >> $BASE/out/$ID/_run
       else
@@ -148,7 +179,11 @@ function run {
       ;;
     _Scala)
       ulimit -d 1000000 -f 1000 -n 100 -v 10000000
-      timeout -v -s 9 ${TIMEOUT}s $SCALA_HOME/bin/scala ${MAIN/.scala/} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
+      timeout -v -s 9 ${TIMEOUT}s scala ${MAIN/.scala/} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
+      ;;
+    _Kotlin)
+      ulimit -d 1000000 -f 1000 -n 100 -v 10000000
+      timeout -v -s 9 ${TIMEOUT}s kotlin ${MAIN/.kt/Kt} $@ < $BASE/in/$ID 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$ID/_run
       ;;
     *)  
       echo Unknown language $LANG > $BASE/out/$ID/_run 
@@ -171,7 +206,7 @@ function unittest {
   cd $BASE/$DIR
   case _"$LANG" in 
     _Java)
-      javac -cp .:$BASE/use/\*:$CODECHECK_HOME/lib/* $MAIN $@ 2>&1 | head --lines $MAXOUTPUTLEN> $BASE/out/$DIR/_compile
+      javac -cp .:$BASE/use/\*:$CODECHECK_HOME/lib/\* $MAIN $@ 2>&1 | head --lines $MAXOUTPUTLEN> $BASE/out/$DIR/_compile
       if [[ ${PIPESTATUS[0]} != 0 ]] ; then
         mv $BASE/out/$DIR/_compile $BASE/out/$DIR/_errors
       else
@@ -186,6 +221,15 @@ function unittest {
     _Racket)
       ulimit -d 100000 -f 1000 -n 100 -v 1000000       
       timeout -v -s 9 ${TIMEOUT}s racket $MAIN 2>&1 | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_run
+      ;;
+    _Rust)
+      rustc -o prog --test $MAIN >> $BASE/out/$DIR/_compile
+      if [[ ${PIPESTATUS[0]} != 0 ]] ; then
+        mv $BASE/out/$DIR/_compile $BASE/out/$DIR/_errors
+      else
+        ulimit -d 100000 -f 1000 -n 100 -v 100000
+        timeout -v -s 9 ${TIMEOUT}s ./prog | head --lines $MAXOUTPUTLEN > $BASE/out/$DIR/_run
+      fi
       ;;
   esac     
 }
@@ -211,5 +255,5 @@ function collect {
   DIR=$1
   shift
   cd $BASE/$DIR
-  cp $@ $BASE/out/$DIR
+  cp --parents $@ $BASE/out/$DIR
 }
